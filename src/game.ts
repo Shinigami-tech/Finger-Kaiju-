@@ -1188,7 +1188,8 @@ export class GameSystem extends createSystem({
     else if (this.game === 'missions') this.grade = this.cleared >= 15 ? 'S' : this.cleared >= 10 ? 'A' : this.cleared >= 6 ? 'B' : this.cleared >= 3 ? 'C' : 'D';
     else if (this.game === 'blitz') {
       const per = this.damage / Math.max(1, this.settings.values.blitz || this.elapsed || 1);
-      this.grade = per >= 400 ? 'S' : per >= 250 ? 'A' : per >= 150 ? 'B' : per >= 70 ? 'C' : 'D';
+      // $M per second: ~$30B in 10 s is an A, $50B+ is an S
+      this.grade = per >= 5000 ? 'S' : per >= 3000 ? 'A' : per >= 2000 ? 'B' : per >= 1000 ? 'C' : 'D';
     } else this.grade = pct >= 1.6 ? 'S' : pct >= 1.1 ? 'A' : pct >= 0.7 ? 'B' : pct >= 0.4 ? 'C' : 'D';
     this.newBest = scoreNow > this.bests[this.game];
     if (this.newBest) {
@@ -1213,6 +1214,7 @@ export class GameSystem extends createSystem({
       cars: this.stat.cars,
       tanks: this.stat.tanks,
       newBest: this.newBest,
+      seconds: this.settings.values.blitz,
     });
     this.lastResult = res;
     if (res.levelUp) {

@@ -16,6 +16,8 @@ export interface RoundStats {
   cars: number;
   tanks: number;
   newBest: boolean;
+  /** Blitz round length in seconds (0 = endless) */
+  seconds: number;
 }
 
 export interface Skin {
@@ -65,29 +67,34 @@ export function dailyFor(date: Date): Daily {
   const n = (lo: number, hi: number) => lo + Math.floor(rnd() * (hi - lo + 1));
   switch (pick) {
     case 0: {
-      const v = n(8, 20) * 100;
-      return { text: `BLITZ: cause $${(v / 1000).toFixed(1)}B of damage`, check: (s) => s.game === 'blitz' && s.damage >= v };
+      const v = n(45, 60) * 1000; // $45B..$60B in a 10-second Blitz
+      return {
+        text: `10s BLITZ: cause $${v / 1000}B of damage`,
+        check: (s) => s.game === 'blitz' && s.seconds === 10 && s.damage >= v,
+      };
     }
     case 1: {
-      const v = n(5, 9);
+      const v = n(10, 14);
       return { text: `HELI HUNT: catch ${v} helicopters`, check: (s) => s.game === 'heli' && s.catches >= v };
     }
     case 2: {
-      const v = n(4, 8);
+      const v = n(10, 14);
       return { text: `MISSIONS: clear ${v} missions`, check: (s) => s.game === 'missions' && s.cleared >= v };
     }
     case 3: {
-      const v = n(4, 8) * 10;
+      const v = n(12, 20) * 10;
       return { text: `Knock down ${v} people in one game`, check: (s) => s.people >= v };
     }
-    case 4:
-      return { text: 'RAMPAGE: flatten a whole city', check: (s) => s.game === 'rampage' && s.cities >= 1 };
+    case 4: {
+      const v = n(2, 3);
+      return { text: `RAMPAGE: flatten ${v} whole cities in one game`, check: (s) => s.game === 'rampage' && s.cities >= v };
+    }
     case 5: {
-      const v = n(8, 15);
+      const v = n(25, 40);
       return { text: `Wreck ${v} cars in one game`, check: (s) => s.cars >= v };
     }
     default: {
-      const v = n(4, 8);
+      const v = n(12, 20);
       return { text: `Destroy ${v} tanks in one game`, check: (s) => s.tanks >= v };
     }
   }
@@ -194,10 +201,11 @@ export class Progress {
     const before = this.level;
     const lines: string[] = [];
     let xp = 0;
-    if (s.game === 'blitz') xp += Math.round(s.damage / 40);
-    else if (s.game === 'heli') xp += s.catches * 30;
-    else if (s.game === 'missions') xp += s.cleared * 40;
-    else xp += Math.round(s.damage / 60) + s.cities * 60;
+    // damage is in $M; a strong 10 s Blitz (~$30B) is worth ~300 XP
+    if (s.game === 'blitz') xp += Math.round(s.damage / (100 * Math.max(1, (s.seconds || 60) / 10)));
+    else if (s.game === 'heli') xp += s.catches * 25;
+    else if (s.game === 'missions') xp += s.cleared * 30;
+    else xp += Math.round(s.damage / 300) + s.cities * 80;
     xp = Math.max(10, Math.min(600, xp));
     lines.push(`+${xp} XP`);
     if (s.newBest) {
