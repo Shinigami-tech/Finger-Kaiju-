@@ -65,7 +65,6 @@ function softDisc() {
   return t;
 }
 
-const SKIN = new Color(0x2f6a3a);
 const HURT = new Color(0xff3a3a);
 const ZOOM = new Color(0x7dff9a);
 
@@ -76,8 +75,18 @@ export class MonsterHands {
   readonly shadows = new Group();
   private caps: Mesh[] = [];
   private claws: Mesh[] = [];
-  private skin = new MeshStandardMaterial({ color: SKIN, roughness: 0.4, metalness: 0.1, flatShading: true });
+  private skin = new MeshStandardMaterial({ color: 0x2f6a3a, roughness: 0.4, metalness: 0.1, flatShading: true });
   private clawMat = new MeshStandardMaterial({ color: 0xf1e6c8, roughness: 0.35, flatShading: true, emissive: 0x201810 });
+  private base = new Color(0x2f6a3a);
+  private rainbow = false;
+  private hue = 0;
+
+  /** claw skin unlocked through progression */
+  setSkin(skin: number, claw: number, rainbow = false) {
+    this.base.set(skin);
+    this.clawMat.color.set(claw);
+    this.rainbow = rainbow;
+  }
   private palmShadows: Mesh[] = [];
   private tipShadows: Mesh[] = [];
   private dir = new Vector3();
@@ -121,7 +130,11 @@ export class MonsterHands {
    * @param tint 0 normal, 1 hurt flash, 2 zooming
    */
   update(hands: HandData[], visible: boolean, city: Object3D, half: number, tint: number) {
-    this.skin.color.copy(tint === 1 ? HURT : tint === 2 ? ZOOM : SKIN);
+    if (this.rainbow) {
+      this.hue = (this.hue + 0.004) % 1;
+      this.base.setHSL(this.hue, 0.75, 0.45);
+    }
+    this.skin.color.copy(tint === 1 ? HURT : tint === 2 ? ZOOM : this.base);
     const scale = city.scale.x;
     for (let h = 0; h < 2; h++) {
       const hand = hands[h];

@@ -28,6 +28,10 @@ music and sound volume, Blitz and Rampage length, difficulty, time of day, fire 
 earthquake shake, kaiju claws, hand shadows, news ticker, reset best scores, end game. The game pauses while settings are open.
 Each game mode keeps its own best score.
 
+**Progression:** every game earns XP. Your kaiju levels up (Baby Kaiju → Street Stomper → Block Buster → ... → Legend of
+the Desk) and unlocks new claw skins (Lava Red, Ice Blue, Toxic Purple, Royal Gold, Shadow, Rainbow). A **daily challenge**
+(the same for every player each day) gives bonus XP and builds a streak.
+
 Your fingertips grow scaly kaiju caps and claws, and your hand casts a shadow on the streets so you can judge height.
 The round starts on a calm golden afternoon and turns into a burning night city: windows and street lamps light up,
 ruins smoke and burn, emergency vehicles race with sirens, and a news ticker reports your rampage live.

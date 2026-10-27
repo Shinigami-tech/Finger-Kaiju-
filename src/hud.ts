@@ -30,6 +30,13 @@ export interface HudState {
   missionProgress?: string;
   newBest?: boolean;
   busy?: boolean;
+  level?: number;
+  levelTitle?: string;
+  xpFrac?: number;
+  daily?: string;
+  dailyDone?: boolean;
+  streak?: number;
+  xpLines?: string;
 }
 
 export const money = (v: number) =>
@@ -74,7 +81,7 @@ export class Hud {
 
   draw(s: HudState) {
     const tkey = s.game === 'blitz' && Number.isFinite(s.time) ? Math.ceil(s.time * 10) : Math.ceil(s.time);
-    const key = JSON.stringify([s.mode, Math.round(s.damage), s.best, tkey, Math.round(s.hp), s.combo, s.destroyed, s.title, s.hint, s.wave, s.game, Math.ceil((s.countdown ?? 0) - 0.4), s.catches, s.lives, s.cleared, s.mission, Math.round((s.missionLeft ?? 0) * 60), s.missionProgress, s.newBest, s.busy]);
+    const key = JSON.stringify([s.mode, Math.round(s.damage), s.best, tkey, Math.round(s.hp), s.combo, s.destroyed, s.title, s.hint, s.wave, s.game, Math.ceil((s.countdown ?? 0) - 0.4), s.catches, s.lives, s.cleared, s.mission, Math.round((s.missionLeft ?? 0) * 60), s.missionProgress, s.newBest, s.busy, s.level, Math.round((s.xpFrac ?? 0) * 100), s.daily, s.dailyDone, s.streak, s.xpLines]);
     if (key === this.last) return;
     this.last = key;
     const g = this.g;
@@ -117,10 +124,35 @@ export class Hud {
         title('FINGER KAIJU', 130, 96, '#ffcf3a');
         title('Get ready...', 270, 60, '#ffffff');
       } else {
-        title('FINGER KAIJU', 120, 96, '#ffcf3a');
-        title('CHOOSE A GAME', 240, 64, '#ffffff');
-        title('Touch a card below the city', 320, 38, '#a9a3d6');
-        title(s.hint ?? 'Grab, throw, crush, slam!', 400, 32, '#8a84b8');
+        // kaiju profile: level, XP, today's challenge
+        title('CHOOSE A GAME', 74, 58, '#ffcf3a');
+        g.textAlign = 'left';
+        g.font = '900 40px system-ui, sans-serif';
+        g.fillStyle = '#9ef0ff';
+        g.fillText(`LV ${s.level ?? 1}`, 80, 160);
+        g.font = '800 36px system-ui, sans-serif';
+        g.fillStyle = '#ffffff';
+        g.fillText((s.levelTitle ?? '').toUpperCase(), 210, 160);
+        g.textAlign = 'right';
+        g.fillStyle = (s.streak ?? 0) > 0 ? '#ff8a5a' : '#6e6898';
+        g.font = '800 30px system-ui, sans-serif';
+        g.fillText(`STREAK ${s.streak ?? 0}`, W - 80, 160);
+        g.textAlign = 'center';
+        g.fillStyle = 'rgba(255,255,255,0.12)';
+        rr(g, 80, 196, W - 160, 26, 13);
+        g.fill();
+        g.fillStyle = '#9ef0ff';
+        rr(g, 80, 196, Math.max(26, (W - 160) * (s.xpFrac ?? 0)), 26, 13);
+        g.fill();
+        g.font = '800 30px system-ui, sans-serif';
+        g.fillStyle = s.dailyDone ? '#6fe08a' : '#ffcf3a';
+        g.fillText(s.dailyDone ? 'DAILY CHALLENGE DONE - come back tomorrow!' : 'DAILY CHALLENGE', W / 2, 290);
+        g.font = '700 34px system-ui, sans-serif';
+        g.fillStyle = s.dailyDone ? '#8a84b8' : '#ffffff';
+        g.fillText(s.daily ?? '', W / 2, 345);
+        g.font = '600 30px system-ui, sans-serif';
+        g.fillStyle = '#a9a3d6';
+        g.fillText('Touch a card below the city', W / 2, 430);
       }
     } else if (s.mode === 'playing' && s.game === 'heli') {
       g.font = '700 40px system-ui, sans-serif';
@@ -215,7 +247,8 @@ export class Hud {
       title(main, 200, 104, '#ffcf3a');
       const best = s.game === 'heli' ? `${s.best} caught` : s.game === 'missions' ? `${s.best} missions` : money(s.best);
       title(s.newBest ? 'NEW RECORD!' : `Rank ${s.grade ?? '-'}   |   Best ${best}`, 300, 50, s.newBest ? '#6fe08a' : '#ffffff');
-      title('Pick a game below to play again', 410, 36, '#a9a3d6');
+      title(s.xpLines || 'Pick a game below to play again', 380, 34, '#9ef0ff');
+      title(`LV ${s.level ?? 1}  ${(s.levelTitle ?? '').toUpperCase()}   |   pick a game below`, 445, 30, '#a9a3d6');
     }
     this.tex.needsUpdate = true;
   }
@@ -353,7 +386,8 @@ export class Coach {
     this.tex.colorSpace = SRGBColorSpace;
     this.mesh = new Mesh(
       new PlaneGeometry(0.3, 0.129),
-      new MeshBasicMaterial({ map: this.tex, transparent: true, depthWrite: false, opacity: 0 }),
+      // drawn on top of the city so tall towers never hide the tips
+      new MeshBasicMaterial({ map: this.tex, transparent: true, depthWrite: false, depthTest: false, opacity: 0 }),
     );
     this.mesh.name = 'Coach';
     this.mesh.renderOrder = 8;

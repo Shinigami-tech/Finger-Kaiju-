@@ -21,6 +21,7 @@ export interface SettingValues {
   claws: boolean;
   shadows: boolean;
   news: boolean;
+  skin: string;
 }
 
 type Key = keyof SettingValues;
@@ -36,6 +37,14 @@ const onOff = (v: number | string | boolean) => (v ? 'ON' : 'OFF');
 const cap = (v: number | string | boolean) => String(v).toUpperCase();
 const vol = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
 
+import { SKINS } from './progress.js';
+
+/** set by the game: how a claw skin is labelled (shows the unlock level while locked) */
+export let skinLabel = (id: string) => SKINS.find((k) => k.id === id)?.name.toUpperCase() ?? id;
+export function setSkinLabeler(fn: (id: string) => string) {
+  skinLabel = fn;
+}
+
 export const DEFS: Def[] = [
   { key: 'music', label: 'Music volume', options: vol, show: pct },
   { key: 'sfx', label: 'Sound effects', options: vol, show: pct },
@@ -47,6 +56,7 @@ export const DEFS: Def[] = [
   { key: 'rebuild', label: 'New city (Rampage)', options: [true, false], show: onOff },
   { key: 'shake', label: 'Earthquake shake', options: [true, false], show: onOff },
   { key: 'claws', label: 'Kaiju claws', options: [true, false], show: onOff },
+  { key: 'skin', label: 'Claw skin', options: SKINS.map((k) => k.id), show: (v) => skinLabel(String(v)) },
   { key: 'shadows', label: 'Hand shadows', options: [true, false], show: onOff },
   { key: 'news', label: 'News ticker', options: [true, false], show: onOff },
 ];
@@ -64,6 +74,7 @@ const DEFAULTS: SettingValues = {
   claws: true,
   shadows: true,
   news: true,
+  skin: 'jungle',
 };
 const STORE = 'finger-kaiju-settings';
 
@@ -72,6 +83,8 @@ export class Settings {
   private listeners: ((v: SettingValues, changed: Key | null) => void)[] = [];
   /** extra actions shown at the bottom of the panels */
   onResetBest: (() => void) | null = null;
+  /** set by the game: whether a value may be picked (locked claw skins are skipped) */
+  allowed: (key: Key, value: unknown) => boolean = () => true;
   /** end the current game and go back to the mode menu */
   onQuit: (() => void) | null = null;
 
@@ -112,8 +125,18 @@ export class Settings {
     const i = d.options.indexOf(this.values[key]);
     const n = d.options.length;
     // numeric scales clamp, choices wrap around
-    const next = typeof d.options[0] === 'number' && key !== 'round' && key !== 'blitz' ? Math.max(0, Math.min(n - 1, i + dir)) : (i + dir + n) % n;
-    this.set(key, d.options[next] as never);
+    if (typeof d.options[0] === 'number' && key !== 'round' && key !== 'blitz') {
+      this.set(key, d.options[Math.max(0, Math.min(n - 1, i + dir))] as never);
+      return;
+    }
+    // choices wrap around, skipping locked ones
+    for (let k = 1; k <= n; k++) {
+      const v = d.options[(i + dir * k + n * k) % n];
+      if (this.allowed(key, v)) {
+        this.set(key, v as never);
+        return;
+      }
+    }
   }
 
   reset() {

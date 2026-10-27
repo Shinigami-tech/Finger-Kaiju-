@@ -40,7 +40,8 @@ import { BLITZ_TIMES, blitzLabel, GameMode, MODES, ModeMenu } from './menu.js';
 import { HandData, HandTracker } from './hands.js';
 import { DayCycle } from './daycycle.js';
 import { Coach, Hud, HudState, money, Ticker } from './hud.js';
-import { mountDesktopSettings, Settings, SettingsBoard, SettingValues } from './settings.js';
+import { Progress, RoundResult, SKINS } from './progress.js';
+import { mountDesktopSettings, setSkinLabeler, Settings, SettingsBoard, SettingValues } from './settings.js';
 import {
   buildKitCity,
   GROUND,
@@ -276,6 +277,9 @@ export class GameSystem extends createSystem({
   private diff = DIFFICULTY.normal;
   private menu = new ModeMenu();
   private coach = new Coach();
+  private progress = new Progress();
+  private lastResult: RoundResult | null = null;
+  private stat = { people: 0, cars: 0, tanks: 0, cities: 0 };
   /** which moves the player has discovered this session (drives the tip nudges) */
   private used = { grab: false, quake: false, crush: false };
   private tipsShown = new Set<string>();
@@ -442,7 +446,7 @@ export class GameSystem extends createSystem({
     this.placeCity(new Vector3(0, 0.72, -0.62), false);
 
     // ---- interactions ----
-    if (import.meta.env.DEV) (window as unknown as { __fk: unknown }).__fk = this; // dev-only debug handle
+    if (import.meta.env.DEV) Object.assign(window, { __fk: this, __fkC: { Building, Tank } }); // dev-only debug handles
     this.cleanupFuncs.push(
       this.queries.pressedBuildings.subscribe('qualify', (e) => {
         this.sfx.unlock();
@@ -536,6 +540,13 @@ export class GameSystem extends createSystem({
       }
       this.refreshMenu();
     };
+    // claw skins unlock with the kaiju's level
+    this.settings.allowed = (key, v) => key !== 'skin' || this.progress.unlockedSkins().some((k) => k.id === v);
+    setSkinLabeler((id) => {
+      const k = SKINS.find((x) => x.id === id);
+      if (!k) return id;
+      return k.level <= this.progress.level ? k.name.toUpperCase() : `LOCKED (LV ${k.level})`;
+    });
     this.settings.onChange((v, changed) => this.applySettings(v, changed));
     this.settings.onQuit = () => {
       if (this.mode === 'playing') this.endRound('GAME ENDED');
@@ -866,6 +877,8 @@ export class GameSystem extends createSystem({
     this.ruins.quality = q;
     this.fx.quality = q;
     this.monster.root.visible = v.claws;
+    const skin = this.progress.unlockedSkins().find((k) => k.id === v.skin) ?? SKINS[0];
+    this.monster.setSkin(skin.skin, skin.claw, skin.rainbow);
     this.monster.shadows.visible = v.shadows;
     this.ticker.enabled = v.news;
     const sky = SKY[v.sky];
@@ -1141,6 +1154,8 @@ export class GameSystem extends createSystem({
     this.lives = 3;
     this.tipsShown.clear();
     this.coach.hide();
+    this.stat = { people: 0, cars: 0, tanks: 0, cities: 0 };
+    this.lastResult = null;
     this.mission = null;
     this.countdown = 0;
     for (const mk of this.markers) mk.visible = false;
@@ -1186,6 +1201,35 @@ export class GameSystem extends createSystem({
       this.refreshMenu();
     }
     this.best = this.bests[this.game];
+    // progression: XP, level-ups, unlocks, daily challenge
+    const lvBefore = this.progress.level;
+    const res = this.progress.finish({
+      game: this.game,
+      damage: this.damage,
+      catches: this.catches,
+      cleared: this.cleared,
+      cities: this.stat.cities,
+      people: this.stat.people,
+      cars: this.stat.cars,
+      tanks: this.stat.tanks,
+      newBest: this.newBest,
+    });
+    this.lastResult = res;
+    if (res.levelUp) {
+      const lv = this.progress.level;
+      const tips: [string, string][] = [['*', `Level ${lv}: ${this.progress.title.toUpperCase()}`]];
+      for (const k of res.unlocked) tips.push(['+', `New claw skin: ${k.name} (Settings)`]);
+      if (tips.length < 3) tips.push(['>', `Next level in ${Math.round((1 - this.progress.levelFrac) * Progress.need(lv))} XP`]);
+      setTimeout(() => {
+        this.coach.show(lvBefore + 1 === lv ? 'LEVEL UP!' : `LEVEL UP x${lv - lvBefore}!`, tips.slice(0, 3), 7);
+        this.sfx.roar(0.8);
+        this.sfx.combo(8);
+      }, 1500);
+      // a freshly unlocked skin is worn right away
+      if (res.unlocked.length) this.settings.set('skin', res.unlocked[res.unlocked.length - 1].id);
+      this.ticker.push(`THE MONSTER GROWS: now level ${lv}, "${this.progress.title}"`, true);
+    }
+    if (res.dailyDone) this.ticker.push(`DAILY CHALLENGE COMPLETE! Streak: ${this.progress.streak} day${this.progress.streak > 1 ? 's' : ''}`, true);
     this.mission = null;
     for (const mk of this.markers) mk.visible = false;
     if (this.heli && this.heli.state !== 'off') {
@@ -1410,6 +1454,7 @@ export class GameSystem extends createSystem({
       if (!this.settings.values.rebuild) return this.endRound('CITY DESTROYED!');
       // wave cleared: a brand new city grows in place of the ruins, with bonus time
       this.wave++;
+      this.stat.cities++;
       if (Number.isFinite(this.time)) this.time += 30;
       this.sfx.roar(1);
       this.sfx.start();
@@ -1485,6 +1530,7 @@ export class GameSystem extends createSystem({
       if (d > radius) continue;
       p.state = 'down';
       this.missionEvent('people');
+      if (this.mode === 'playing') this.stat.people++;
       p.stateT = 1.4 + Math.random() * 1.1 + d * 2;
       p.jumpT = 0;
       const k = (push * (1 - d / radius)) / Math.max(0.01, d);
@@ -1515,6 +1561,7 @@ export class GameSystem extends createSystem({
 
   private wreckCar(car: Car, from: Vector3) {
     this.missionEvent('car');
+    if (this.mode === 'playing') this.stat.cars++;
     car.state = 'dead';
     car.respawn = 5;
     car.obj.scale.set(1.25, 0.3, 1.25);
@@ -1582,6 +1629,7 @@ export class GameSystem extends createSystem({
     this.c.y += 0.035;
     if (this.mode === 'playing') this.score(bonus, this.c, label, '#9ef0ff');
     this.missionEvent('tank');
+    if (this.mode === 'playing') this.stat.tanks++;
     for (const side of SIDES) {
       const hd = this.held[side];
       if (hd && hd.ref.kind === 'tank' && hd.ref.e === e) this.held[side] = null;
@@ -2633,6 +2681,13 @@ export class GameSystem extends createSystem({
       missionProgress: this.mission && this.mission.id !== 'hands' ? `${Math.min(this.mission.progress, this.mission.need)}/${this.mission.need}` : '',
       newBest: this.newBest,
       busy: !!this.rebuild || this.pendingStart,
+      level: this.progress.level,
+      levelTitle: this.progress.title,
+      xpFrac: this.progress.levelFrac,
+      daily: this.progress.daily.text,
+      dailyDone: this.progress.dailyDoneToday,
+      streak: this.progress.liveStreak,
+      xpLines: this.lastResult?.lines.join('   ') ?? '',
       hint: this.mode === 'ready' && this.wasImmersive ? 'Grab, crush, throw | 2-hand pinch = zoom' : undefined,
     });
   }
