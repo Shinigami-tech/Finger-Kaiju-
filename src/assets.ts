@@ -1,54 +1,25 @@
-/**
- * Copyright (c) Meta Platforms, Inc. and affiliates.
- *
- * This source code is licensed under the MIT license found in the
- * LICENSE file in the root directory of this source tree.
- */
-
 import { AssetType, defineAssets } from '@iwsdk/core';
+import { KIT, kitAssetId } from './kit-manifest.js';
+import { CALM_MUSIC_ID, MUSIC_ID, SFX_FILES, sfxAssetId } from './sfx-manifest.js';
 
 const publicAssetUrl = (filePath: string): string =>
   `${import.meta.env.BASE_URL}${filePath.replace(/^\/+/u, '')}`;
-const DEFAULT_STOCK_ASSET_BASE =
-  'https://cdn.jsdelivr.net/npm/@iwsdk/example-assets@0.4.2/assets';
-const configuredStockAssetBase =
-  import.meta.env.VITE_IWSDK_EXAMPLE_ASSET_BASE_URL?.trim();
-const stockAssetBase = (
-  configuredStockAssetBase || DEFAULT_STOCK_ASSET_BASE
-).replace(/\/+$/u, '');
 
-function stockAssetUrl(assetId: string, fileName: string): string {
-  return `${stockAssetBase}/${assetId}/${fileName}`;
+const entries: Record<string, { url: string; type: AssetType; name: string; priority: 'lazy' }> = {};
+for (const [key, m] of Object.entries(KIT)) {
+  entries[kitAssetId(key)] = { url: publicAssetUrl(m.path), type: AssetType.GLTF, name: key, priority: 'lazy' };
 }
+for (const s of SFX_FILES) {
+  entries[sfxAssetId(s)] = { url: publicAssetUrl(`audio/sfx/${s}.ogg`), type: AssetType.Audio, name: s, priority: 'lazy' };
+}
+entries[MUSIC_ID] = { url: publicAssetUrl('audio/music-fight-loop.ogg'), type: AssetType.Audio, name: 'Fight loop', priority: 'lazy' };
+entries[CALM_MUSIC_ID] = { url: publicAssetUrl('audio/music-calm-loop.ogg'), type: AssetType.Audio, name: 'Calm loop', priority: 'lazy' };
 
 export default defineAssets({
-  'environment-desk': {
-    url: stockAssetUrl('environment-desk', 'environmentDesk.gltf'),
-    type: AssetType.GLTF,
-    name: 'Environment Desk',
-    priority: 'lazy',
-  },
-  'plant-sansevieria': {
-    url: stockAssetUrl('plant-sansevieria', 'plantSansevieria.gltf'),
-    type: AssetType.GLTF,
-    name: 'Plant Sansevieria',
-    priority: 'lazy',
-  },
-  robot: {
-    url: stockAssetUrl('robot', 'robot.gltf'),
-    type: AssetType.GLTF,
-    name: 'Robot',
-    priority: 'lazy',
-  },
+  ...entries,
   'welcome-panel': {
     url: publicAssetUrl('ui/welcome.uikitml'),
     type: AssetType.UIKitML,
     name: 'Welcome Panel',
-  },
-  'webxr-banner': {
-    url: publicAssetUrl('gltf/webxr-banner/banner.gltf'),
-    type: AssetType.GLTF,
-    name: 'WebXR Banner',
-    priority: 'lazy',
   },
 });
