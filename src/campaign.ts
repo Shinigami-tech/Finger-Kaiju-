@@ -37,7 +37,19 @@ export const LEVELS: LevelDef[] = [
   { n: 3, city: 'TOKYO', title: 'BLOCK PARTY', story: 'Flatten a whole street', goal: { buildings: 8 }, limit: 120, par: 70, sky: 0.45, theme: 4 },
   { n: 4, city: 'TOKYO', title: 'CHONKY POWER', story: 'Bigger hamster: topple the big ones', goal: { marked: 2, buildings: 8 }, markedMin: 0.07, limit: 130, par: 80, sky: 0.62, theme: 4 },
   { n: 5, city: 'TOKYO', title: 'THE ARMY ARRIVES', story: 'Tanks and a helicopter! Throw cars at them', goal: { tanks: 4, buildings: 6 }, limit: 150, par: 95, sky: 0.86, theme: 4 },
+  { n: 6, city: 'SEOUL', title: 'NIGHT MARKET', story: 'Neon Seoul: smash the glowing shops', goal: { marked: 4, cars: 3 }, limit: 130, par: 75, sky: 0.74, theme: 6 },
+  { n: 7, city: 'SEOUL', title: 'MEGA HAMSTER', story: 'You are huge now: stomp through the small stuff', goal: { buildings: 12 }, limit: 120, par: 70, sky: 0.5, theme: 6 },
+  { n: 8, city: 'SEOUL', title: 'CORNERED', story: 'Police everywhere. Break out!', goal: { tanks: 3, buildings: 8 }, limit: 140, par: 90, sky: 0.8, theme: 6 },
+  { n: 9, city: 'SEOUL', title: 'TOWER TOPPLE', story: 'Bring down the glowing towers', goal: { marked: 3 }, markedMin: 0.12, limit: 120, par: 70, sky: 0.36, theme: 6 },
+  { n: 10, city: 'SEOUL', title: 'SEOUL SIEGE', story: 'The whole army. Survive and wreck', goal: { tanks: 5, cars: 4, buildings: 10 }, limit: 170, par: 115, sky: 0.9, theme: 6 },
+  { n: 11, city: 'LOS ANGELES', title: 'GIGA HAMSTER', story: 'Sunny LA meets a giga hamster', goal: { buildings: 15 }, limit: 130, par: 75, sky: 0.15, theme: 7 },
+  { n: 12, city: 'LOS ANGELES', title: 'FREEWAY FRENZY', story: 'Eat or throw 10 cars', goal: { cars: 10 }, limit: 120, par: 65, sky: 0.3, theme: 7 },
+  { n: 13, city: 'LOS ANGELES', title: 'HOLLYWOOD STOMP', story: 'Topple the glowing landmarks', goal: { marked: 4, buildings: 10 }, markedMin: 0.14, limit: 150, par: 95, sky: 0.52, theme: 7 },
+  { n: 14, city: 'LOS ANGELES', title: 'AIR RAID', story: 'Helicopters and tanks: throw everything!', goal: { tanks: 6, buildings: 12 }, limit: 170, par: 115, sky: 0.7, theme: 7 },
+  { n: 15, city: 'LOS ANGELES', title: 'KAIJU HAMSTER', story: 'The final form. Flatten LA', goal: { buildings: 25, tanks: 4 }, limit: 180, par: 120, sky: 0.93, theme: 7 },
 ];
+export const CITIES = ['TOKYO', 'SEOUL', 'LOS ANGELES'];
+export const PER_CITY = 5;
 
 export const goalLines = (g: LevelGoal, p: Required<LevelGoal> | null) => {
   const out: string[] = [];
@@ -154,7 +166,7 @@ class CanvasPlane {
   }
 }
 
-export type UiPick = { kind: 'level'; i: number } | { kind: 'retry' } | { kind: 'next' } | { kind: 'levels' } | { kind: 'back' } | { kind: 'zoom'; dir: 1 | -1 };
+export type UiPick = { kind: 'page'; dir: 1 | -1 } | { kind: 'level'; i: number } | { kind: 'retry' } | { kind: 'next' } | { kind: 'levels' } | { kind: 'back' } | { kind: 'zoom'; dir: 1 | -1 };
 
 export interface UiButton {
   plane: CanvasPlane;
@@ -187,6 +199,8 @@ export class CampaignUi {
   readonly board = new CanvasPlane(1024, 560, 0.36, 'CampaignBoard');
   readonly buttons: UiButton[] = [];
   readonly levelCards: UiButton[] = [];
+  readonly pageButtons: UiButton[] = [];
+  page = 0;
   readonly resultButtons: UiButton[] = [];
   readonly zoomButtons: UiButton[] = [];
   readonly back: UiButton;
@@ -198,10 +212,30 @@ export class CampaignUi {
   constructor() {
     this.root.name = 'CampaignUi';
     this.root.add(this.board.mesh);
-    LEVELS.forEach((_, i) => {
+    for (let i = 0; i < PER_CITY; i++) {
       const b = this.add(new CanvasPlane(384, 500, 0.085, `LevelCard-${i + 1}`), { kind: 'level', i });
       this.levelCards.push(b);
-    });
+    }
+    for (const dir of [-1, 1] as const) {
+      const b = this.add(new CanvasPlane(200, 200, 0.04, `CityPage-${dir}`, true), { kind: 'page', dir });
+      const g = b.plane.g;
+      g.fillStyle = 'rgba(16,12,36,0.92)';
+      g.beginPath();
+      g.arc(100, 100, 94, 0, Math.PI * 2);
+      g.fill();
+      g.lineWidth = 10;
+      g.strokeStyle = '#ffcf3a';
+      g.stroke();
+      g.fillStyle = '#fff';
+      g.beginPath();
+      g.moveTo(100 + dir * 42, 100);
+      g.lineTo(100 - dir * 28, 52);
+      g.lineTo(100 - dir * 28, 148);
+      g.closePath();
+      g.fill();
+      b.plane.tex.needsUpdate = true;
+      this.pageButtons.push(b);
+    }
     this.back = this.add(new CanvasPlane(384, 500, 0.085, 'LevelCard-back'), { kind: 'back' });
     for (const [id, label] of [
       ['retry', 'RETRY'],
@@ -256,7 +290,11 @@ export class CampaignUi {
   }
 
   drawLevelCards(save: CampaignSave) {
-    this.levelCards.forEach((b, i) => {
+    this.pageButtons[0].enabled = this.page > 0;
+    this.pageButtons[1].enabled = this.page < CITIES.length - 1;
+    this.levelCards.forEach((b, k) => {
+      const i = this.page * PER_CITY + k;
+      b.pick = { kind: 'level', i };
       const L = LEVELS[i];
       const p = b.plane;
       const g = p.g;
@@ -314,6 +352,9 @@ export class CampaignUi {
     g.font = '700 30px system-ui, sans-serif';
     g.fillStyle = '#ffcf3a';
     g.fillText(`★ ${save.total} / ${LEVELS.length * 3}`, p.cw / 2, 380);
+    g.font = '900 34px system-ui, sans-serif';
+    g.fillStyle = '#9ef0ff';
+    g.fillText(`${CITIES[this.page]} ${this.page + 1}/${CITIES.length}`, p.cw / 2, 440);
     p.tex.needsUpdate = true;
   }
 

@@ -70,7 +70,7 @@ import {
 import { MonsterHands } from './monster-hands.js';
 import { Bubble } from './bubble.js';
 import { HamsterPaws } from './paws.js';
-import { BoardState, CampaignSave, CampaignUi, LEVELS, UiPick } from './campaign.js';
+import { BoardState, CampaignSave, CampaignUi, CITIES, LEVELS, PER_CITY, UiPick } from './campaign.js';
 import { formForLevel, Hero } from './hero.js';
 import { Ruins } from './ruins.js';
 import { kitAssetId } from './kit-manifest.js';
@@ -296,6 +296,8 @@ export class GameSystem extends createSystem({
     godSpawnAt: 25,
     godDone: false,
     heliT: 8,
+    copT: 4,
+    stunT: 0,
     prevMode: 'rampage' as GameMode,
   };
   /** dev/testing: pin the time of day (null = follow the round) */
@@ -1088,6 +1090,7 @@ export class GameSystem extends createSystem({
     }
     this.spawnTraffic(kit.cars);
     this.spawnPeople(kit.chars);
+    this.spawnCops(kit.chars);
     // the helicopter is clickable on desktop too
     if (this.heli) {
       const he = this.world.createTransformEntity(this.heli.obj, { parent: this.cityEntity });
@@ -2744,7 +2747,8 @@ export class GameSystem extends createSystem({
         this.c.copy(o.position).setY(0.03);
         this.fx.popup(this.c, 'EEK!', '#ffffff');
       }
-      if (near < 0.1) {
+      const fear = this.camp.phase === 'play' ? 0.17 : 0.1;
+      if (near < fear) {
         if (p.scared <= 0 || near < 0.05) {
           if (p.state === 'idle') p.state = 'walk';
           this.pickNext(p, nx, nz, true);
@@ -2769,7 +2773,7 @@ export class GameSystem extends createSystem({
       const dx = gx - o.position.x;
       const dz = gz - o.position.z;
       const dist = Math.hypot(dx, dz);
-      const speed = running ? 0.055 : p.speed;
+      const speed = running ? (this.camp.phase === 'play' ? 0.085 : 0.055) : p.speed;
       if (dist < 0.002) {
         o.position.x = gx;
         o.position.z = gz;
@@ -2844,6 +2848,10 @@ export class GameSystem extends createSystem({
       if (hit) {
         if (hero) {
           this.hero.hurt();
+          this.b.copy(s.v).setY(0).normalize();
+          this.moveHero(this.b.x * 0.008, this.b.z * 0.008);
+          this.c.copy(this.heroPos).setY(this.hero.form.height + 0.02);
+          this.fx.popup(this.c, `-${Math.round(this.diff.dmg * 0.75)} HP`, '#ff5a5a');
           this.shakeT = 0.3;
           this.shakeAmp = this.settings.values.shake ? 0.002 : 0;
         }
@@ -2928,10 +2936,11 @@ export class GameSystem extends createSystem({
     this.zoomT = 1;
     this.hero.root.visible = false;
     for (const mk of this.markers) mk.visible = false;
+    this.cui.page = Math.floor(this.camp.level / PER_CITY);
     this.cui.drawLevelCards(this.csave);
-    if (this.destroyed > 0 || this.cityGone || this.ruins.burning > 0 || this.theme !== LEVELS[0].theme) {
-      this.startRebuild(LEVELS[0].theme, false);
-    }
+    const th = LEVELS[this.cui.page * PER_CITY].theme;
+    if (this.destroyed > 0 || this.cityGone || this.ruins.burning > 0 || this.theme !== th) this.startRebuild(th, false);
+    this.clearCops();
     this.cityGone = false;
     this.resetRound(false);
     this.hero.preload(formForLevel(1));
@@ -2939,6 +2948,7 @@ export class GameSystem extends createSystem({
   }
 
   private leaveCampaign() {
+    this.clearCops();
     this.camp.phase = 'off';
     this.game = this.camp.prevMode;
     this.zoomT = this.zoomV = 1;
@@ -2964,6 +2974,16 @@ export class GameSystem extends createSystem({
       return;
     }
     if (this.pendingStart || this.rebuild) return;
+    if (p.kind === 'page') {
+      if (this.camp.phase !== 'select') return;
+      const np = Math.max(0, Math.min(CITIES.length - 1, this.cui.page + p.dir));
+      if (np === this.cui.page) return;
+      this.cui.page = np;
+      this.cui.drawLevelCards(this.csave);
+      this.startRebuild(LEVELS[np * PER_CITY].theme, false);
+      this.ticker.push(`WELCOME TO ${CITIES[np]}`, true);
+      return;
+    }
     if (p.kind === 'level') {
       if (this.camp.phase === 'select' && this.csave.unlocked(p.i)) this.startLevel(p.i);
       return;
@@ -3003,6 +3023,9 @@ export class GameSystem extends createSystem({
     this.camp.powerT = 0;
     this.camp.godT = 0;
     this.camp.autoChew = false;
+    this.camp.copT = 5;
+    this.camp.stunT = 0;
+    this.clearCops();
     this.policeCd.clear();
     const form = formForLevel(L.n);
     this.camp.newForm = form.level === L.n && L.n > 1 ? form.name : '';
@@ -3037,8 +3060,10 @@ export class GameSystem extends createSystem({
         const o = e.object3D;
         if (!o) continue;
         const h = e.getValue(Building, 'height') ?? 0;
-        if (h > form.power || h < (L.markedMin ?? 0)) continue;
-        cands.push({ e, d: Math.hypot(o.position.x - this.heroPos.x, o.position.z - this.heroPos.z) + Math.random() * 0.05 });
+        if (h > form.power) continue;
+        // prefer the tall ones the level asks for, but never leave the goal impossible
+        const tallEnough = h >= (L.markedMin ?? 0);
+        cands.push({ e, d: Math.hypot(o.position.x - this.heroPos.x, o.position.z - this.heroPos.z) + Math.random() * 0.05 + (tallEnough ? 0 : 10) });
       }
       cands.sort((a, b) => a.d - b.d);
       // spread them out a bit: skip candidates right next to an already chosen one
@@ -3101,6 +3126,7 @@ export class GameSystem extends createSystem({
       this.heli.obj.visible = false;
     }
     for (const e of this.queries.tanks.entities) if (e.getValue(Tank, 'alive')) this.hideTank(e);
+    for (const c of this.cops) if (c.state !== 'down') this.copAnim(c, 'idle');
     for (const sh of this.shells) {
       sh.active = false;
       sh.mesh.visible = false;
@@ -3124,10 +3150,29 @@ export class GameSystem extends createSystem({
     if (ti >= 0) this.camp.progress.marked++;
     else this.camp.progress.buildings++;
     const r = Math.max(w, d) * 0.62;
+    this.hitCops(o.position.x, o.position.z, r);
+    let shouts = 0;
     for (const p of this.people) {
       if (p.state === 'down') continue;
-      if (Math.hypot(p.obj.position.x - o.position.x, p.obj.position.z - o.position.z) < r) this.hurtPerson(p, o.position);
+      const dd = Math.hypot(p.obj.position.x - o.position.x, p.obj.position.z - o.position.z);
+      if (dd < r) this.hurtPerson(p, o.position);
+      else if (dd < 0.3) {
+        // everyone nearby panics: jump, scream and sprint away
+        p.scared = 4;
+        if (p.state === 'idle') p.state = 'walk';
+        this.pickNext(p, o.position.x, o.position.z, true);
+        if (p.jumpT <= 0) {
+          p.jumpT = 0.6;
+          this.playAnim(p, 'jump', 0.06);
+        }
+        if (shouts < 3 && Math.random() < 0.5) {
+          shouts++;
+          this.c.copy(p.obj.position).setY(0.035);
+          this.fx.popup(this.c, ['AAAH!', 'RUN!', 'HAMSTER!!', 'HELP!'][Math.floor(Math.random() * 4)], '#ffffff');
+        }
+      }
     }
+    this.sfx.scream(2);
   }
 
   private hurtPerson(p: Person, from: Vector3) {
@@ -3404,6 +3449,176 @@ export class GameSystem extends createSystem({
     return true;
   }
 
+  /* ---------------- police officers (campaign) ---------------- */
+  private cops: {
+    obj: Object3D;
+    mixer: AnimationMixer;
+    actions: Record<string, AnimationAction | undefined>;
+    current: string;
+    state: 'off' | 'run' | 'shoot' | 'down';
+    t: number;
+    cd: number;
+    yaw: number;
+  }[] = [];
+
+  private spawnCops(protos: CharProto[]) {
+    if (!protos.length) return;
+    const blue = new Color(0x3a5bd8);
+    for (let i = 0; i < 6; i++) {
+      const proto = protos[i % protos.length];
+      const obj = spawnChar(proto);
+      // police uniform: tint the whole figure navy blue
+      obj.traverse((o) => {
+        const m = o as Mesh;
+        if (!m.isMesh) return;
+        const mat = (m.material as MeshStandardMaterial).clone();
+        mat.color.multiply(blue).multiplyScalar(1.4);
+        m.material = mat;
+      });
+      obj.scale.multiplyScalar(1.1);
+      obj.visible = false;
+      this.city.add(obj);
+      const mixer = new AnimationMixer(obj);
+      const actions: Record<string, AnimationAction | undefined> = {};
+      for (const n of ['sprint', 'holding-right-shoot', 'idle', 'die']) {
+        const clip = AnimationClip.findByName(proto.clips, n);
+        if (clip) actions[n] = mixer.clipAction(clip);
+      }
+      const d = actions.die;
+      if (d) {
+        d.setLoop(LoopOnce, 1);
+        d.clampWhenFinished = true;
+      }
+      this.cops.push({ obj, mixer, actions, current: '', state: 'off', t: 0, cd: 1, yaw: 0 });
+    }
+  }
+
+  private copAnim(c: (typeof this.cops)[number], name: string) {
+    if (c.current === name) return;
+    const next = c.actions[name];
+    if (!next) return;
+    if (c.current) c.actions[c.current]?.fadeOut(0.15);
+    next.reset().fadeIn(0.15).play();
+    c.current = name;
+  }
+
+  private clearCops() {
+    for (const c of this.cops) {
+      c.state = 'off';
+      c.obj.visible = false;
+    }
+  }
+
+  /** hits near a point knock police officers over (no star penalty: they are not civilians) */
+  private hitCops(x: number, z: number, r: number) {
+    let n = 0;
+    for (const c of this.cops) {
+      if (c.state !== 'run' && c.state !== 'shoot') continue;
+      if (Math.hypot(c.obj.position.x - x, c.obj.position.z - z) > r) continue;
+      c.state = 'down';
+      c.t = 2.5;
+      this.copAnim(c, 'die');
+      this.c.copy(c.obj.position).setY(0.04);
+      if (n++ === 0) this.fx.popup(this.c, 'COP DOWN!', '#9ec8ff');
+    }
+    return n;
+  }
+
+  private updateCops(dt: number) {
+    const play = this.camp.phase === 'play' && this.canScore();
+    const L = LEVELS[this.camp.level];
+    const hx = this.heroPos.x;
+    const hz = this.heroPos.z;
+    const form = this.hero.form;
+    // more officers in later levels
+    if (play && L.n >= 2 && this.camp.godT <= 0) {
+      const max = Math.min(this.cops.length, 1 + Math.floor(L.n / 2));
+      let alive = 0;
+      for (const c of this.cops) if (c.state !== 'off') alive++;
+      this.camp.copT -= dt;
+      if (alive < max && this.camp.copT <= 0) {
+        const c = this.cops.find((x) => x.state === 'off');
+        if (c) {
+          this.camp.copT = 7 - Math.min(4, L.n * 0.3);
+          // run in from the ring road, away from the hamster
+          for (let k = 0; k < 12; k++) {
+            this.ringPos(Math.random() * 4, c.obj.position);
+            if (Math.hypot(c.obj.position.x - hx, c.obj.position.z - hz) > 0.2) break;
+          }
+          c.obj.position.y = 0.004;
+          c.obj.visible = true;
+          c.state = 'run';
+          c.cd = 1.5;
+          this.copAnim(c, 'sprint');
+          this.c.copy(c.obj.position).setY(0.04);
+          this.fx.popup(this.c, 'POLICE! FREEZE!', '#9ec8ff');
+          this.sfx.siren();
+        }
+      }
+    }
+    for (const c of this.cops) {
+      if (c.state === 'off') continue;
+      c.mixer.update(dt);
+      if (!play && c.state !== 'down') {
+        this.copAnim(c, 'idle');
+        continue;
+      }
+      if (c.state === 'down') {
+        c.t -= dt;
+        if (c.t <= 0) {
+          c.state = 'off';
+          c.obj.visible = false;
+        }
+        continue;
+      }
+      const dx = hx - c.obj.position.x;
+      const dz = hz - c.obj.position.z;
+      const d = Math.hypot(dx, dz) || 1e-5;
+      c.yaw = Math.atan2(dx, dz);
+      c.obj.rotation.y = c.yaw;
+      const stopAt = this.hero.radius + 0.045;
+      if (d > stopAt) {
+        c.state = 'run';
+        this.copAnim(c, 'sprint');
+        const sp = 0.06 * dt;
+        c.obj.position.x += (dx / d) * sp;
+        c.obj.position.z += (dz / d) * sp;
+        // slide around buildings
+        for (const e of this.queries.buildings.entities) {
+          if (!e.getValue(Building, 'alive')) continue;
+          const o = e.object3D;
+          if (!o) continue;
+          const half = ((e.getValue(Building, 'width') ?? 0.03) / 2) * 0.9 + 0.004;
+          const ox = c.obj.position.x - o.position.x;
+          const oz = c.obj.position.z - o.position.z;
+          if (Math.abs(ox) < half && Math.abs(oz) < half) {
+            if (half - Math.abs(ox) < half - Math.abs(oz)) c.obj.position.x = o.position.x + Math.sign(ox) * half;
+            else c.obj.position.z = o.position.z + Math.sign(oz) * half;
+          }
+        }
+      } else {
+        c.state = 'shoot';
+        this.copAnim(c, 'holding-right-shoot');
+      }
+      c.cd -= dt;
+      if (c.cd <= 0 && d < 0.16 && this.camp.godT <= 0) {
+        c.cd = 1.6 + Math.random() * 0.8;
+        this.fire(this.a.copy(c.obj.position).setY(0.014), this.b.copy(this.heroPos).setY(this.hero.root.position.y + form.height * 0.5), 0.3);
+      }
+      // brave ones try to tackle the hamster: it freezes for a moment
+      if (d < this.hero.radius + 0.008 && this.camp.stunT <= 0 && this.hero.root.position.y < form.height * 0.3) {
+        this.camp.stunT = 0.8;
+        this.hero.hurt();
+        this.hp = Math.max(0, this.hp - 6);
+        this.c.copy(this.heroPos).setY(form.height + 0.02);
+        this.fx.popup(this.c, 'STOP RIGHT THERE!', '#9ec8ff');
+        this.sfx.ouch();
+        c.obj.position.x -= (dx / d) * 0.03;
+        c.obj.position.z -= (dz / d) * 0.03;
+      }
+    }
+  }
+
   /** height of the roof under a point (0 = street) */
   private groundAt(x: number, z: number) {
     let g = 0;
@@ -3591,6 +3806,7 @@ export class GameSystem extends createSystem({
         }
       } else if (hit === 'heli') this.killHeli('HELI DOWN ');
       else if (hit === 'tank' && hb) this.killTank(hb, 80, 'TANK HIT ');
+      this.hitCops(p.x, p.z, 0.035);
       // people under the impact get hurt
       for (const pp of this.people) {
         if (pp.state !== 'down' && Math.hypot(pp.obj.position.x - p.x, pp.obj.position.z - p.z) < 0.02) this.hurtPerson(pp, p);
@@ -3768,7 +3984,8 @@ export class GameSystem extends createSystem({
     let grabHeld = false;
     let jump = false;
     const god = this.camp.godT > 0;
-    if (ph === 'play' && this.canScore() && !hero.carried && !god) {
+    this.camp.stunT = Math.max(0, this.camp.stunT - dt);
+    if (ph === 'play' && this.canScore() && !hero.carried && !god && this.camp.stunT <= 0) {
       const lp = this.input.gamepads.left;
       const rp = this.input.gamepads.right;
       const kb = this.input.keyboard;
@@ -4003,6 +4220,7 @@ export class GameSystem extends createSystem({
     this.updateThrows(dt);
     this.updateSeeds(dt);
     this.updateDefense(dt);
+    this.updateCops(dt);
 
     // glowing goal markers
     let mi = 0;
@@ -4129,6 +4347,7 @@ export class GameSystem extends createSystem({
         if (p.state !== 'down' && Math.hypot(p.obj.position.x - ix, p.obj.position.z - iz) < hitR * 0.8) this.hurtPerson(p, this.heroPos);
       }
     }
+    if (this.hitCops(ix, iz, hitR + 0.01)) hitSomething = true;
     if (!hitSomething) this.fx.puff(imp.setY(y0 + 0.002), 0.002, 2);
   }
 
@@ -4140,6 +4359,7 @@ export class GameSystem extends createSystem({
     const showBoard = on && ph !== 'select';
     const showResult = on && (ph === 'won' || ph === 'lost') && this.camp.revealT > 1.2;
     for (const b of this.cui.levelCards) b.plane.mesh.visible = showCards;
+    for (const b of this.cui.pageButtons) b.plane.mesh.visible = showCards && b.enabled;
     this.cui.back.plane.mesh.visible = showCards;
     this.cui.board.mesh.visible = showBoard;
     for (const b of this.cui.resultButtons) b.plane.mesh.visible = showResult;
@@ -4156,6 +4376,7 @@ export class GameSystem extends createSystem({
       const all = [...this.cui.levelCards, this.cui.back];
       const n = all.length;
       all.forEach((b, i) => place(b.plane.mesh, (i - (n - 1) / 2) * 0.094, 0.1, 0.34, Math.sin(t * 2 + i) * 0.003));
+      this.cui.pageButtons.forEach((b, i) => place(b.plane.mesh, (i === 0 ? -1 : 1) * ((n - 1) / 2 * 0.094 + 0.075), 0.1, 0.34));
     }
     if (showBoard) place(this.cui.board.mesh, 0, 0.3, -0.36);
     if (showResult) {
@@ -4208,7 +4429,9 @@ export class GameSystem extends createSystem({
       if (kb.getKeyDown('KeyL')) this.onCampaignPick({ kind: 'levels' });
     }
     if (ph === 'select') {
-      for (let i = 0; i < LEVELS.length; i++) if (kb.getKeyDown(`Digit${i + 1}`)) this.onCampaignPick({ kind: 'level', i });
+      for (let i = 0; i < PER_CITY; i++) if (kb.getKeyDown(`Digit${i + 1}`)) this.onCampaignPick({ kind: 'level', i: this.cui.page * PER_CITY + i });
+      if (kb.getKeyDown('BracketLeft')) this.onCampaignPick({ kind: 'page', dir: -1 });
+      if (kb.getKeyDown('BracketRight')) this.onCampaignPick({ kind: 'page', dir: 1 });
       if (kb.getKeyDown('Escape')) this.onCampaignPick({ kind: 'back' });
     }
   }

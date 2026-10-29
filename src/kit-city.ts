@@ -115,6 +115,17 @@ export const THEMES: { name: string; layout: (bi: number, bj: number) => Distric
     name: 'HARBOUR HEIGHTS',
     layout: (bi, bj) => (bi === 3 && bj === 0 ? 'park' : bi === 0 ? 'industrial' : bi === 1 ? 'downtown' : bj === 3 ? 'suburban' : 'commercial'),
   },
+  {
+    // dense, tall and neon: towers everywhere with a ring of shops
+    name: 'SEOUL',
+    layout: (bi, bj) => (bi === 0 && bj === 3 ? 'park' : (bi === 0 || bi === 3 || bj === 0 || bj === 3) && (bi + bj) % 2 === 1 ? 'commercial' : 'downtown'),
+  },
+  {
+    // sunny, wide and low: houses, shops, palm-tree parks and a port
+    name: 'LOS ANGELES',
+    layout: (bi, bj) =>
+      (bi === 3 && bj === 0) || (bi === 0 && bj === 3) ? 'park' : bi === 3 ? 'industrial' : (bi === 1 || bi === 2) && (bj === 1 || bj === 2) ? 'commercial' : 'suburban',
+  },
 ];
 
 function pickBuilding(get: (k: string) => GLTF | undefined, d: District, lot: KitLot): { model: Object3D; stats: BuildingStats } | null {

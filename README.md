@@ -10,12 +10,12 @@ A Moss-style diorama: the city sits on your table and you play **one chubby gian
 person**, walking the streets of Tokyo and wrecking it from the inside. Zoom in to street level (the rest of the
 city fades to a see-through ghost so you still see everything around) or zoom out to see all of Tokyo.
 
-- **5 levels**, each with one clear goal and **3 stars**: **goal done, faster than par, nobody hurt**.
+- **15 levels in 3 cities** (Tokyo, neon Seoul, sunny Los Angeles), each with one clear goal and **3 stars**: **goal done, faster than par, nobody hurt**.
 - The hamster **waddles** (yes, the bottom jiggles), **punches**, **jumps onto roofs** (a hard landing is a
   butt slam), **grabs cars and gnaws them** or **throws them** at buildings, tanks and the helicopter.
 - **Sunflower seeds** on streets and roofs: +3 s and health; 5 seeds = cheeks full = super punch.
   A rare **golden seed** gives **15 s of GOD MODE**: your own hands become the monster (smash, grab, quake).
-- **The city fights back:** police cars shoot from level 2, a helicopter from level 4, tanks in level 5.
+- **The city fights back:** police officers run at you, shoot and tackle you (you freeze for a moment), police cars shoot, a helicopter and tanks join later. The hamster has health; knock the officers over (that doesn't cost a star). People panic, scream and sprint away from every crash.
 - It **grows** with the campaign: Hamster -> Chonky Hamster (level 4) -> Mega -> Giga -> Kaiju Hamster.
 - **Controllers:** left stick walk, A punch / throw, B jump, X grab (hold X = gnaw), right stick zoom,
   hold grip and point at any surface to move the city there.
