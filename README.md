@@ -10,7 +10,7 @@ A Moss-style diorama: the city sits on your table and you play **one chubby gian
 person**, walking the streets of Tokyo and wrecking it from the inside. Zoom in to street level (the rest of the
 city fades to a see-through ghost so you still see everything around) or zoom out to see all of Tokyo.
 
-- **15 levels in 3 cities** (Tokyo, neon Seoul, sunny Los Angeles), each with one clear goal and **3 stars**: **goal done, faster than par, nobody hurt**.
+- **30 levels in 6 cities** (Tokyo, neon Seoul, sunny Los Angeles, Astana with its Bayterek, old Vienna, Palermo), each with one clear goal and **3 stars**: **goal done, faster than par, nobody hurt**.
 - The hamster **waddles** (yes, the bottom jiggles), **punches**, **jumps onto roofs** (a hard landing is a
   butt slam), **grabs cars and gnaws them** or **throws them** at buildings, tanks and the helicopter.
 - **Sunflower seeds** on streets and roofs: +3 s and health; 5 seeds = cheeks full = super punch.

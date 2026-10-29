@@ -126,6 +126,23 @@ export const THEMES: { name: string; layout: (bi: number, bj: number) => Distric
     layout: (bi, bj) =>
       (bi === 3 && bj === 0) || (bi === 0 && bj === 3) ? 'park' : bi === 3 ? 'industrial' : (bi === 1 || bi === 2) && (bj === 1 || bj === 2) ? 'commercial' : 'suburban',
   },
+  {
+    // a capital on the steppe: a glassy modern core, wide boulevards of parks, new districts around
+    name: 'ASTANA',
+    layout: (bi, bj) =>
+      (bi === 1 || bi === 2) && bj === 1 ? 'downtown' : (bi === 1 || bi === 2) && bj === 2 ? 'park' : bj === 3 ? 'suburban' : 'commercial',
+  },
+  {
+    // the old imperial city: low ornate blocks, a green ring of parks, hardly any towers
+    name: 'VIENNA',
+    layout: (bi, bj) =>
+      (bi === 0 || bi === 3) && (bj === 0 || bj === 3) ? 'park' : (bi === 1 || bi === 2) && (bj === 1 || bj === 2) ? 'commercial' : 'suburban',
+  },
+  {
+    // a Sicilian port: tight old streets, sunny houses, the harbour along one side
+    name: 'PALERMO',
+    layout: (bi, bj) => (bj === 0 ? 'industrial' : bi === 3 && bj === 3 ? 'park' : (bi + bj) % 3 === 0 ? 'commercial' : 'suburban'),
+  },
 ];
 
 function pickBuilding(get: (k: string) => GLTF | undefined, d: District, lot: KitLot): { model: Object3D; stats: BuildingStats } | null {

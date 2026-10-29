@@ -263,6 +263,51 @@ export class GameSystem extends createSystem({
   private seeds: { mesh: Mesh; pos: Vector3; active: boolean; roof: Entity | null }[] = [];
   private golden!: { mesh: Mesh; pos: Vector3; active: boolean; life: number };
   private policeCd = new Map<Car, number>();
+  /** Astana's landmark: a white lattice "tree" holding a golden egg */
+  private bayterek!: Group;
+
+  private buildBayterek() {
+    const g = new Group();
+    g.name = 'Bayterek';
+    const white = new MeshStandardMaterial({ color: 0xf4f4f0, roughness: 0.45 });
+    const gold = new MeshStandardMaterial({ color: 0xffc23a, emissive: 0xff9a00, emissiveIntensity: 0.35, metalness: 0.75, roughness: 0.22 });
+    const glass = new MeshStandardMaterial({ color: 0x9fd3ff, emissive: 0x3a7bff, emissiveIntensity: 0.25, metalness: 0.3, roughness: 0.15 });
+    const H = 0.15;
+    const rod = new CylinderGeometry(0.0012, 0.0016, 1, 6);
+    // trunk: a ring of rods that flare out at the top like branches
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * Math.PI * 2;
+      const r0 = 0.006;
+      const r1 = 0.016;
+      const m = new Mesh(rod, white);
+      const x0 = Math.cos(a) * r0;
+      const z0 = Math.sin(a) * r0;
+      const x1 = Math.cos(a) * r1;
+      const z1 = Math.sin(a) * r1;
+      const len = Math.hypot(x1 - x0, H, z1 - z0);
+      m.scale.set(1, len, 1);
+      m.position.set((x0 + x1) / 2, H / 2, (z0 + z1) / 2);
+      m.lookAt(x1, H, z1);
+      m.rotateX(Math.PI / 2);
+      m.castShadow = true;
+      g.add(m);
+    }
+    const core = new Mesh(new CylinderGeometry(0.004, 0.0055, H, 10), white);
+    core.position.y = H / 2;
+    g.add(core);
+    const egg = new Mesh(new SphereGeometry(0.019, 24, 16), glass);
+    egg.position.y = H + 0.016;
+    egg.castShadow = true;
+    const shell = new Mesh(new SphereGeometry(0.0195, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.62), gold);
+    shell.position.y = H + 0.016;
+    g.add(egg, shell);
+    const base = new Mesh(new CylinderGeometry(0.02, 0.024, 0.004, 24), white);
+    base.position.y = 0.002;
+    g.add(base);
+    g.position.set(0.075, 0, 0.075);
+    g.visible = false;
+    return g;
+  }
   private camp = {
     phase: 'off' as 'off' | 'select' | 'intro' | 'play' | 'won' | 'lost',
     level: 0,
@@ -499,6 +544,8 @@ export class GameSystem extends createSystem({
     gm.visible = false;
     this.city.add(gm);
     this.golden = { mesh: gm, pos: new Vector3(), active: false, life: 0 };
+    this.bayterek = this.buildBayterek();
+    this.city.add(this.bayterek);
 
     // shells
     const shellGeo = new SphereGeometry(0.0035, 10, 8);
@@ -1933,6 +1980,7 @@ export class GameSystem extends createSystem({
       return;
     }
     this.updateRebuild(dt);
+    this.bayterek.visible = this.theme === 8 && (!this.rebuild || this.rebuild.swapped);
 
     // game-mode menu
     const showMenu = this.placed && this.menuOpen() && this.camp.phase === 'off';

@@ -47,8 +47,23 @@ export const LEVELS: LevelDef[] = [
   { n: 13, city: 'LOS ANGELES', title: 'HOLLYWOOD STOMP', story: 'Topple the glowing landmarks', goal: { marked: 4, buildings: 10 }, markedMin: 0.14, limit: 150, par: 95, sky: 0.52, theme: 7 },
   { n: 14, city: 'LOS ANGELES', title: 'AIR RAID', story: 'Helicopters and tanks: throw everything!', goal: { tanks: 6, buildings: 12 }, limit: 170, par: 115, sky: 0.7, theme: 7 },
   { n: 15, city: 'LOS ANGELES', title: 'KAIJU HAMSTER', story: 'The final form. Flatten LA', goal: { buildings: 25, tanks: 4 }, limit: 180, par: 120, sky: 0.93, theme: 7 },
+  { n: 16, city: 'ASTANA', title: 'STEPPE STORM', story: 'A giant hamster on the left bank', goal: { buildings: 18 }, limit: 140, par: 85, sky: 0.2, theme: 8 },
+  { n: 17, city: 'ASTANA', title: 'GLASS TOWERS', story: 'Topple the glowing glass towers', goal: { marked: 5 }, markedMin: 0.15, limit: 130, par: 80, sky: 0.45, theme: 8 },
+  { n: 18, city: 'ASTANA', title: 'WINTER TRAFFIC', story: 'Eat or throw 12 cars', goal: { cars: 12 }, limit: 130, par: 75, sky: 0.3, theme: 8 },
+  { n: 19, city: 'ASTANA', title: 'BOULEVARD BRAWL', story: 'Tanks on the boulevard', goal: { tanks: 6, buildings: 14 }, limit: 170, par: 115, sky: 0.65, theme: 8 },
+  { n: 20, city: 'ASTANA', title: 'CAPITAL NIGHT', story: 'Flatten the capital under the city lights', goal: { buildings: 30, tanks: 4 }, limit: 190, par: 130, sky: 0.92, theme: 8 },
+  { n: 21, city: 'VIENNA', title: 'WALTZ OF RUIN', story: 'Old Vienna, new hamster', goal: { buildings: 20 }, limit: 140, par: 85, sky: 0.25, theme: 9 },
+  { n: 22, city: 'VIENNA', title: 'OPERA SMASH', story: 'Smash the glowing palaces', goal: { marked: 5, cars: 5 }, limit: 140, par: 90, sky: 0.5, theme: 9 },
+  { n: 23, city: 'VIENNA', title: 'CAFE CRUNCH', story: 'Nobody gets hurt. Be careful!', goal: { buildings: 22 }, limit: 150, par: 95, sky: 0.35, theme: 9 },
+  { n: 24, city: 'VIENNA', title: 'RING ROAD RUMBLE', story: 'Tanks circle the Ring', goal: { tanks: 7, cars: 6 }, limit: 170, par: 110, sky: 0.7, theme: 9 },
+  { n: 25, city: 'VIENNA', title: 'EMPIRE FALLS', story: 'The whole old town', goal: { buildings: 34, tanks: 5 }, limit: 200, par: 140, sky: 0.9, theme: 9 },
+  { n: 26, city: 'PALERMO', title: 'SICILIAN SUN', story: 'Hot streets, hungry hamster', goal: { buildings: 22, cars: 6 }, limit: 150, par: 95, sky: 0.18, theme: 10 },
+  { n: 27, city: 'PALERMO', title: 'HARBOUR HAVOC', story: 'Wreck the port', goal: { marked: 5, tanks: 4 }, limit: 160, par: 105, sky: 0.4, theme: 10 },
+  { n: 28, city: 'PALERMO', title: 'MARKET MAYHEM', story: 'Eat or throw 15 cars', goal: { cars: 15 }, limit: 150, par: 90, sky: 0.55, theme: 10 },
+  { n: 29, city: 'PALERMO', title: 'LAST STAND', story: 'The biggest army yet', goal: { tanks: 9, buildings: 18 }, limit: 200, par: 140, sky: 0.75, theme: 10 },
+  { n: 30, city: 'PALERMO', title: 'HAMSTER LEGEND', story: 'Leave nothing standing', goal: { buildings: 40, tanks: 6, cars: 6 }, limit: 230, par: 160, sky: 0.94, theme: 10 },
 ];
-export const CITIES = ['TOKYO', 'SEOUL', 'LOS ANGELES'];
+export const CITIES = ['TOKYO', 'SEOUL', 'LOS ANGELES', 'ASTANA', 'VIENNA', 'PALERMO'];
 export const PER_CITY = 5;
 
 export const goalLines = (g: LevelGoal, p: Required<LevelGoal> | null) => {
