@@ -72,6 +72,7 @@ function makeHand(): HandData {
 export class HandTracker {
   readonly hands: Record<'left' | 'right', HandData> = { left: makeHand(), right: makeHand() };
   private v = new Vector3();
+  private virtual = { left: false, right: false };
 
   update(renderer: WebGLRenderer, player: Object3D, dt: number) {
     const frame = renderer.xr.getFrame?.() as XRFrame | null | undefined;
@@ -138,6 +139,11 @@ export class HandTracker {
     }
     for (const side of ['left', 'right'] as const) {
       const h = this.hands[side];
+      // driven by a controller last frame (fromController): keep its edges intact
+      if (!seen[side] && this.virtual[side]) {
+        this.virtual[side] = false;
+        continue;
+      }
       if (!seen[side]) {
         h.pinchEnd = h.pinch;
         h.grabEnd = h.grab;
@@ -166,6 +172,7 @@ export class HandTracker {
    */
   fromController(which: 'left' | 'right', grip: Object3D, close: number, pinchBtn: boolean, dt: number) {
     const h = this.hands[which];
+    this.virtual[which] = true;
     grip.updateWorldMatrix(true, false);
     this.m.copy(grip.matrixWorld);
     this.m.decompose(this.pos, this.q, this.v);

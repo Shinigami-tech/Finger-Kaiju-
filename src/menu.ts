@@ -39,32 +39,9 @@ export const MODES: ModeInfo[] = [
     },
   },
   {
-    id: 'blitz',
-    title: 'BLITZ',
-    lines: ['Smash as much as you can', 'before the clock runs out'],
-    color: '#ff5a36',
-    icon: (g, x, y) => {
-      // stopwatch
-      g.lineWidth = 16;
-      g.strokeStyle = '#fff';
-      g.beginPath();
-      g.arc(x, y + 10, 78, 0, Math.PI * 2);
-      g.stroke();
-      g.fillStyle = '#fff';
-      g.fillRect(x - 18, y - 100, 36, 26);
-      g.beginPath();
-      g.moveTo(x, y + 10);
-      g.lineTo(x + 46, y - 30);
-      g.stroke();
-      g.font = '900 56px system-ui, sans-serif';
-      g.textAlign = 'center';
-      g.fillText('10', x, y + 52);
-    },
-  },
-  {
     id: 'heli',
     title: 'HELI HUNT',
-    lines: ['The city is gone. Catch', 'the fast chopper!'],
+    lines: ['GOD MODE: hamster paws vs', 'the fastest chopper ever'],
     color: '#36b0ff',
     icon: (g, x, y) => {
       g.fillStyle = '#fff';
@@ -83,21 +60,9 @@ export const MODES: ModeInfo[] = [
     },
   },
   {
-    id: 'missions',
-    title: 'MISSIONS',
-    lines: ['Crazy quick orders,', '3 lives. How far can you go?'],
-    color: '#b55cff',
-    icon: (g, x, y) => {
-      g.fillStyle = '#fff';
-      g.font = '900 150px system-ui, sans-serif';
-      g.textAlign = 'center';
-      g.fillText('!?', x, y + 40);
-    },
-  },
-  {
     id: 'rampage',
     title: 'RAMPAGE',
-    lines: ['Classic: wreck the city,', 'fight tanks & choppers'],
+    lines: ['GOD MODE: rip buildings', 'off and THROW them!'],
     color: '#3fbf5a',
     icon: (g, x, y) => {
       // skyline
@@ -169,7 +134,7 @@ export class ModeMenu {
     this.chip.name = 'BlitzTimeChip';
     this.chip.renderOrder = 7;
     this.chip.position.set(CARD_W / 2 - CHIP_W / 2 + 0.008, CARD_H / 2 - CHIP_H / 2 + 0.004, 0.002);
-    this.cards[BLITZ_INDEX].add(this.chip);
+    if (BLITZ_INDEX >= 0) this.cards[BLITZ_INDEX].add(this.chip);
   }
 
   drawChip(seconds: number) {

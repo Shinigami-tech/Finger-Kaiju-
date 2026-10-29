@@ -13,8 +13,12 @@ city fades to a see-through ghost so you still see everything around) or zoom ou
 - **30 levels in 6 cities** (Tokyo, neon Seoul, sunny Los Angeles, Astana with its Bayterek, old Vienna, Palermo), each with one clear goal and **3 stars**: **goal done, faster than par, nobody hurt**.
 - The hamster **waddles** (yes, the bottom jiggles), **punches**, **jumps onto roofs** (a hard landing is a
   butt slam), **grabs cars and gnaws them** or **throws them** at buildings, tanks and the helicopter.
-- **Sunflower seeds** on streets and roofs: +3 s and health; 5 seeds = cheeks full = super punch.
-  A rare **golden seed** gives **15 s of GOD MODE**: your own hands become the monster (smash, grab, quake).
+- **Sunflower seeds** on streets and roofs heal the hamster (a compass arrow points to the nearest one);
+  5 seeds = cheeks full = super punch.
+- **Upgrade cards** after every newly cleared level: Stronger Paws, Thick Fur, Quick Feet, Spring Legs,
+  Big Cheeks, then **Double Jump** and **Quake Pound** (double jump + punch in the air = earthquake).
+  The defense gets tougher every level too. Every hit shows the damage dealt and the building's HP left.
+- **Move list:** press **?** next to the city, **CONTROLS** in the settings, or **H** on desktop.
 - **The city fights back:** police officers run at you, shoot and tackle you (you freeze for a moment), police cars shoot, a helicopter and tanks join later. The hamster has health; knock the officers over (that doesn't cost a star). People panic, scream and sprint away from every crash.
 - It **grows** with the campaign: Hamster -> Chonky Hamster (level 4) -> Mega -> Giga -> Kaiju Hamster.
 - **Controllers:** left stick walk, A punch / throw, B jump, X grab (hold X = gnaw), right stick zoom,
@@ -23,7 +27,13 @@ city fades to a see-through ghost so you still see everything around) or zoom ou
   pinch a building while holding a car to throw it there, pinch the hamster to carry him, two-hand pinch to zoom.
 - **Desktop:** WASD (Shift run), J punch / throw, E grab (hold = gnaw), Space jump, + / - zoom.
 
-## How to play (classic modes)
+## God modes: Rampage and Heli Hunt
+
+Your hands (tracked hands or Quest controllers: squeeze = fist, trigger = pinch) become giant hamster paws.
+**Rampage:** rip buildings off the ground and throw them. **Heli Hunt:** the chopper flees from your paws and you
+must actually grab it. Blitz and Missions were removed.
+
+## How to play (classic modes, older notes)
 
 1. Open the game in the Meta Quest browser and press **Enter Mixed Reality**.
 2. Look at a table. The city lands on it automatically (no table? it appears in front of you after a few seconds).

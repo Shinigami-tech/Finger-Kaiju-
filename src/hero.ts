@@ -47,7 +47,7 @@ export const HERO_FORMS: HeroForm[] = [
   { id: 'chonk', name: 'Chonky Hamster', level: 4, asset: 'hero-hamster', height: 0.046, power: 0.125, speed: 0.08, stomp: 0, lifts: true, color: '#ff8a3a' },
   { id: 'mega', name: 'Mega Hamster', level: 7, asset: 'hero-hamster', height: 0.066, power: 0.18, speed: 0.09, stomp: 0.3, lifts: true, color: '#5ff0ff' },
   { id: 'giga', name: 'Giga Hamster', level: 11, asset: 'hero-hamster', height: 0.09, power: 0.3, speed: 0.1, stomp: 0.35, lifts: true, color: '#6fe08a' },
-  { id: 'kaiju', name: 'Kaiju Hamster', level: 15, asset: 'hero-hamster', height: 0.13, power: 1, speed: 0.11, stomp: 0.45, lifts: true, color: '#b55cff', tint: 0xffd0ff },
+  { id: 'kaiju', name: 'Kaiju Hamster', level: 15, asset: 'hero-hamster', height: 0.13, power: 1, speed: 0.11, stomp: 0.45, lifts: true, color: '#b55cff', tint: 0xfff2e6 },
 ];
 
 /** the form a campaign level is played with */
@@ -208,7 +208,7 @@ export class Hero {
       // the fur is very light: tone it down a little so it doesn't blow out in the sun
       mat.color.multiplyScalar(0.82);
       mat.emissive = new Color(form.id === 'kaiju' ? 0x5a1a7a : 0xff2020);
-      mat.emissiveIntensity = form.id === 'kaiju' ? 0.35 : 0;
+      mat.emissiveIntensity = form.id === 'kaiju' ? 0.12 : 0;
       mat.metalness = 0;
       mat.roughness = Math.max(0.65, mat.roughness ?? 0.8);
       this.wobbly(mat);
@@ -277,7 +277,7 @@ export class Hero {
     this.hurtT = Math.max(0, this.hurtT - dt);
     this.flash = Math.max(0, this.flash - dt);
     this.winT = Math.max(0, this.winT - dt);
-    for (const m of this.mats) m.emissiveIntensity = this.flash > 0 ? 1.2 : this.form.id === 'kaiju' ? 0.35 : 0;
+    for (const m of this.mats) m.emissiveIntensity = this.flash > 0 ? 1.2 : this.form.id === 'kaiju' ? 0.12 : 0;
     const walk = this.carried || this.airborne ? 0 : this.moving;
     this.u.hT.value = this.t;
     this.u.hWalk.value += (walk - this.u.hWalk.value) * Math.min(1, dt * 8);

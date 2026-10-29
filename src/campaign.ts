@@ -77,14 +77,48 @@ export const goalLines = (g: LevelGoal, p: Required<LevelGoal> | null) => {
 };
 
 const STORE = 'finger-kaiju-campaign';
+/** permanent hamster upgrades, picked from cards after each newly cleared level */
+export interface Upgrades {
+  power: number;
+  fur: number;
+  speed: number;
+  jump: number;
+  cheeks: number;
+  double: number;
+  pound: number;
+}
+export type UpgradeId = keyof Upgrades;
+export interface UpgradeCard {
+  id: UpgradeId;
+  title: string;
+  lines: string[];
+  color: string;
+  icon: string;
+  max: number;
+  /** level (1-based) from which the card can show up */
+  from: number;
+  needs?: UpgradeId;
+}
+export const UPGRADES: UpgradeCard[] = [
+  { id: 'power', title: 'STRONGER PAWS', lines: ['+25% damage', 'to buildings'], color: '#ff5a36', icon: '\u{1F44A}', max: 6, from: 1 },
+  { id: 'fur', title: 'THICK FUR', lines: ['+25 max health', 'and full heal'], color: '#6fe08a', icon: '\u2764\uFE0F', max: 6, from: 1 },
+  { id: 'speed', title: 'QUICK FEET', lines: ['+12% walk', 'and run speed'], color: '#36b0ff', icon: '\u{1F45F}', max: 4, from: 1 },
+  { id: 'jump', title: 'SPRING LEGS', lines: ['+18% jump height', 'reach taller roofs'], color: '#b55cff', icon: '\u{1F998}', max: 4, from: 2 },
+  { id: 'cheeks', title: 'BIG CHEEKS', lines: ['Seeds heal more', 'and give +2s more'], color: '#ffcf3a', icon: '\u{1F33B}', max: 3, from: 2 },
+  { id: 'double', title: 'DOUBLE JUMP', lines: ['Press JUMP again', 'in the air'], color: '#5ff0ff', icon: '\u2B06\uFE0F', max: 1, from: 3 },
+  { id: 'pound', title: 'QUAKE POUND', lines: ['Double jump, then PUNCH', 'in the air: EARTHQUAKE!'], color: '#ff8a3a', icon: '\u{1F4A5}', max: 1, from: 4, needs: 'double' },
+];
+
 export class CampaignSave {
   stars: number[] = LEVELS.map(() => 0);
   times: number[] = LEVELS.map(() => 0);
+  up: Upgrades = { power: 0, fur: 0, speed: 0, jump: 0, cheeks: 0, double: 0, pound: 0 };
   constructor() {
     try {
-      const v = JSON.parse(localStorage.getItem(STORE) ?? 'null') as { stars?: number[]; times?: number[] } | null;
+      const v = JSON.parse(localStorage.getItem(STORE) ?? 'null') as { stars?: number[]; times?: number[]; up?: Partial<Upgrades> } | null;
       if (v?.stars) v.stars.forEach((s, i) => i < this.stars.length && (this.stars[i] = s | 0));
       if (v?.times) v.times.forEach((s, i) => i < this.times.length && (this.times[i] = +s || 0));
+      if (v?.up) for (const k of Object.keys(this.up) as UpgradeId[]) this.up[k] = Math.max(0, (v.up[k] ?? 0) | 0);
     } catch {
       /* storage unavailable */
     }
@@ -100,15 +134,32 @@ export class CampaignSave {
     this.stars[i] = Math.max(this.stars[i], stars);
     if (stars > 0 && (this.times[i] === 0 || time < this.times[i])) this.times[i] = time;
     try {
-      localStorage.setItem(STORE, JSON.stringify({ stars: this.stars, times: this.times }));
+      localStorage.setItem(STORE, JSON.stringify({ stars: this.stars, times: this.times, up: this.up }));
     } catch {
       /* storage unavailable */
     }
     return better;
   }
+  /** 3 random cards the player can still take at this level */
+  offer(level: number): UpgradeCard[] {
+    const pool = UPGRADES.filter((u) => level >= u.from && this.up[u.id] < u.max && (!u.needs || this.up[u.needs] > 0));
+    // the new moves are special: offer them as soon as they are available
+    const special = pool.filter((u) => u.max === 1);
+    const rest = pool.filter((u) => u.max > 1).sort(() => Math.random() - 0.5);
+    return [...special, ...rest].slice(0, 3);
+  }
+  take(id: UpgradeId) {
+    this.up[id]++;
+    try {
+      localStorage.setItem(STORE, JSON.stringify({ stars: this.stars, times: this.times, up: this.up }));
+    } catch {
+      /* storage unavailable */
+    }
+  }
   reset() {
     this.stars.fill(0);
     this.times.fill(0);
+    for (const k of Object.keys(this.up) as UpgradeId[]) this.up[k] = 0;
     try {
       localStorage.removeItem(STORE);
     } catch {
@@ -181,7 +232,7 @@ class CanvasPlane {
   }
 }
 
-export type UiPick = { kind: 'page'; dir: 1 | -1 } | { kind: 'level'; i: number } | { kind: 'retry' } | { kind: 'next' } | { kind: 'levels' } | { kind: 'back' } | { kind: 'zoom'; dir: 1 | -1 };
+export type UiPick = { kind: 'card'; i: number } | { kind: 'help' } | { kind: 'page'; dir: 1 | -1 } | { kind: 'level'; i: number } | { kind: 'retry' } | { kind: 'next' } | { kind: 'levels' } | { kind: 'back' } | { kind: 'zoom'; dir: 1 | -1 };
 
 export interface UiButton {
   plane: CanvasPlane;
@@ -205,6 +256,7 @@ export interface BoardState {
   countdown: number;
   best: number;
   seeds: number;
+  hpMax: number;
   god: number;
   holding: boolean;
 }
@@ -218,6 +270,10 @@ export class CampaignUi {
   page = 0;
   readonly resultButtons: UiButton[] = [];
   readonly zoomButtons: UiButton[] = [];
+  readonly cards: UiButton[] = [];
+  readonly helpButton: UiButton;
+  readonly help: CanvasPlane;
+  offered: UpgradeCard[] = [];
   readonly back: UiButton;
   private v = new Vector3();
   private cool = 0;
@@ -278,6 +334,28 @@ export class CampaignUi {
       b.plane.tex.needsUpdate = true;
       this.zoomButtons.push(b);
     }
+    for (let k = 0; k < 3; k++) this.cards.push(this.add(new CanvasPlane(384, 520, 0.09, `Upgrade-${k}`), { kind: 'card', i: k }));
+    this.helpButton = this.add(new CanvasPlane(200, 200, 0.034, 'HelpButton', true), { kind: 'help' });
+    {
+      const g = this.helpButton.plane.g;
+      g.fillStyle = 'rgba(16,12,36,0.92)';
+      g.beginPath();
+      g.arc(100, 100, 94, 0, Math.PI * 2);
+      g.fill();
+      g.lineWidth = 10;
+      g.strokeStyle = '#ffcf3a';
+      g.stroke();
+      g.fillStyle = '#ffcf3a';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.font = '900 120px system-ui, sans-serif';
+      g.fillText('?', 100, 108);
+      this.helpButton.plane.tex.needsUpdate = true;
+    }
+    this.help = new CanvasPlane(1600, 1000, 0.62, 'ControlsSheet');
+    this.help.mesh.renderOrder = 40; // above every other floating icon
+    this.root.add(this.help.mesh);
+    this.drawHelp();
   }
 
   private add(plane: CanvasPlane, pick: UiPick) {
@@ -373,9 +451,144 @@ export class CampaignUi {
     p.tex.needsUpdate = true;
   }
 
+  drawCards(save: CampaignSave) {
+    this.cards.forEach((b, k) => {
+      const c = this.offered[k];
+      b.enabled = !!c;
+      const p = b.plane;
+      const g = p.g;
+      g.clearRect(0, 0, p.cw, p.ch);
+      if (!c) {
+        p.tex.needsUpdate = true;
+        return;
+      }
+      const grad = g.createLinearGradient(0, 0, 0, p.ch);
+      grad.addColorStop(0, '#2a2060');
+      grad.addColorStop(1, '#120d2c');
+      g.fillStyle = grad;
+      rr(g, 8, 8, p.cw - 16, p.ch - 16, 40);
+      g.fill();
+      g.lineWidth = 12;
+      g.strokeStyle = c.color;
+      g.stroke();
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillStyle = c.color;
+      g.beginPath();
+      g.arc(p.cw / 2, 140, 92, 0, Math.PI * 2);
+      g.fill();
+      g.font = '110px system-ui, "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+      g.fillText(c.icon, p.cw / 2, 146);
+      g.fillStyle = '#fff';
+      g.font = '900 40px system-ui, "Arial Black", sans-serif';
+      g.fillText(c.title, p.cw / 2, 285);
+      g.font = '700 30px system-ui, sans-serif';
+      g.fillStyle = '#d0caf5';
+      c.lines.forEach((l, i) => g.fillText(l, p.cw / 2, 345 + i * 40));
+      g.font = '800 28px system-ui, sans-serif';
+      g.fillStyle = '#ffcf3a';
+      const lv = save.up[c.id];
+      g.fillText(c.max > 1 ? `LEVEL ${lv} \u2192 ${lv + 1}` : 'NEW MOVE!', p.cw / 2, 455);
+      p.tex.needsUpdate = true;
+    });
+  }
+
+  /** the move list ("like the combo list in a fighting game") */
+  drawHelp() {
+    const p = this.help;
+    const g = p.g;
+    const W = p.cw;
+    const H = p.ch;
+    g.clearRect(0, 0, W, H);
+    g.fillStyle = 'rgba(14,10,34,0.96)';
+    rr(g, 10, 10, W - 20, H - 20, 50);
+    g.fill();
+    g.lineWidth = 12;
+    g.strokeStyle = '#ffcf3a';
+    g.stroke();
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillStyle = '#ffcf3a';
+    g.font = '900 64px system-ui, "Arial Black", sans-serif';
+    g.fillText('HAMSTER MOVE LIST', W / 2, 78);
+    g.font = '700 28px system-ui, sans-serif';
+    g.fillStyle = '#a9a3d6';
+    g.fillText('Touch ? or press H to close', W / 2, 128);
+    const cols: [string, [string, string][]][] = [
+      [
+        'QUEST CONTROLLERS',
+        [
+          ['Left stick', 'Walk (full tilt = run)'],
+          ['A / right trigger', 'Punch'],
+          ['B', 'Jump (onto roofs!)'],
+          ['B in the air', 'Double jump *'],
+          ['Double jump + A', 'QUAKE POUND *'],
+          ['X / left trigger', 'Grab a car or tank'],
+          ['Hold X', 'Eat it  (NOM NOM)'],
+          ['A while holding', 'Throw it'],
+          ['Right stick', 'Zoom in / out'],
+          ['Hold grip + point', 'Move the whole city'],
+        ],
+      ],
+      [
+        'HANDS ONLY',
+        [
+          ['Pinch the street', 'Walk there'],
+          ['Pinch a building', 'Go and smash it'],
+          ['Pinch a car', 'Go, grab and eat it'],
+          ['Holding + pinch house', 'Throw it there'],
+          ['Pinch the hamster', 'Pick him up, carry'],
+          ['Two-hand pinch', 'Zoom'],
+          ['Pinch & hold 1 s', 'Move the city (menus)'],
+          ['RAMPAGE: pinch / fist', 'Rip off, crush, THROW'],
+          ['RAMPAGE: slam palm', 'Earthquake'],
+        ],
+      ],
+      [
+        'KEYBOARD & TIPS',
+        [
+          ['W A S D  +  Shift', 'Walk / run'],
+          ['J', 'Punch / throw'],
+          ['Space (x2)', 'Jump / double jump *'],
+          ['E (hold)', 'Grab / eat'],
+          ['+ / -', 'Zoom'],
+          ['Seeds', 'Heal  |  5 = SUPER PUNCH'],
+          ['God mode', 'RAMPAGE & HELI HUNT'],
+          ['Police', 'Knock them over (free)'],
+          ['People', 'Hurt nobody = 3rd star'],
+        ],
+      ],
+    ];
+    const cw = (W - 120) / 3;
+    cols.forEach(([title, rows], c) => {
+      const x = 60 + c * cw;
+      g.textAlign = 'left';
+      g.font = '900 36px system-ui, sans-serif';
+      g.fillStyle = '#9ef0ff';
+      g.fillText(title, x + 10, 200);
+      rows.forEach(([k, v], i) => {
+        const y = 262 + i * 70;
+        g.fillStyle = 'rgba(255,255,255,0.08)';
+        rr(g, x, y - 30, cw - 24, 60, 14);
+        g.fill();
+        g.font = '800 26px system-ui, sans-serif';
+        g.fillStyle = '#ffcf3a';
+        g.fillText(k, x + 16, y - 6);
+        g.font = '600 24px system-ui, sans-serif';
+        g.fillStyle = '#ffffff';
+        g.fillText(v, x + 16, y + 18);
+      });
+    });
+    g.textAlign = 'center';
+    g.font = '700 26px system-ui, sans-serif';
+    g.fillStyle = '#a9a3d6';
+    g.fillText('* unlock with upgrade cards (win levels to get them)', W / 2, H - 40);
+    p.tex.needsUpdate = true;
+  }
+
   /** the floating scoreboard */
   drawBoard(s: BoardState) {
-    const key = JSON.stringify([s.phase, s.level.n, Math.ceil(s.time), s.progress, s.hurt, Math.round(s.hp), s.shown, s.reason, Math.ceil(s.countdown), s.newForm, s.seeds, Math.ceil(s.god), s.holding]);
+    const key = JSON.stringify([s.phase, s.level.n, Math.ceil(s.time), s.progress, s.hurt, Math.round(s.hp), s.hpMax, s.shown, s.reason, Math.ceil(s.countdown), s.newForm, s.seeds, Math.ceil(s.god), s.holding]);
     if (key === this.lastKey) return;
     this.lastKey = key;
     const p = this.board;
@@ -452,7 +665,7 @@ export class CampaignUi {
           g.fillStyle = 'rgba(255,255,255,0.12)';
           rr(g, 200, 468, W - 400, 34, 17);
           g.fill();
-          const hp = Math.max(0, Math.min(1, s.hp / 100));
+          const hp = Math.max(0, Math.min(1, s.hp / s.hpMax));
           g.fillStyle = hp > 0.5 ? '#6fe08a' : hp > 0.25 ? '#ffcf3a' : '#ff5a5a';
           rr(g, 200, 468, Math.max(34, (W - 400) * hp), 34, 17);
           g.fill();

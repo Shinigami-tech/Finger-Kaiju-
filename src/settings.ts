@@ -87,6 +87,8 @@ export class Settings {
   allowed: (key: Key, value: unknown) => boolean = () => true;
   /** end the current game and go back to the mode menu */
   onQuit: (() => void) | null = null;
+  /** open the move list */
+  onControls: (() => void) | null = null;
 
   constructor() {
     try {
@@ -185,8 +187,12 @@ export function mountDesktopSettings(s: Settings) {
   }
   const actions = document.createElement('div');
   actions.className = 'fk-actions';
-  actions.innerHTML = '<button class="alt">Defaults</button><button class="alt">Reset best</button><button>End game</button>';
-  const [defs, best, quit] = actions.querySelectorAll('button');
+  actions.innerHTML = '<button class="alt">Defaults</button><button class="alt">Reset best</button><button class="alt">Controls</button><button>End game</button>';
+  const [defs, best, ctl, quit] = actions.querySelectorAll('button');
+  ctl.addEventListener('click', () => {
+    s.onControls?.();
+    panel.classList.remove('open');
+  });
   defs.addEventListener('click', () => s.reset());
   best.addEventListener('click', () => s.onResetBest?.());
   quit.addEventListener('click', () => {
@@ -303,9 +309,13 @@ export class SettingsBoard {
       g.fillText(d.show(this.s.values[d.key]), (636 + W - 124) / 2, y + ROW_H / 2);
     });
     const by = TOP + DEFS.length * ROW_H + 24;
-    this.button(40, by, 290, 76, 'DEFAULTS', () => this.s.reset(), '#2c2560');
-    this.button(367, by, 290, 76, 'RESET BEST', () => this.s.onResetBest?.(), '#2c2560');
-    this.button(W - 330, by, 290, 76, 'END GAME', () => {
+    this.button(40, by, 220, 76, 'DEFAULTS', () => this.s.reset(), '#2c2560');
+    this.button(280, by, 220, 76, 'RESET BEST', () => this.s.onResetBest?.(), '#2c2560');
+    this.button(520, by, 224, 76, 'CONTROLS', () => {
+      this.s.onControls?.();
+      this.open = false;
+    }, '#6a5cff');
+    this.button(W - 260, by, 220, 76, 'END GAME', () => {
       this.s.onQuit?.();
       this.open = false;
     }, '#e0242c');

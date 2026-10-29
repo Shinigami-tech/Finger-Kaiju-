@@ -67,19 +67,16 @@ export function dailyFor(date: Date): Daily {
   const n = (lo: number, hi: number) => lo + Math.floor(rnd() * (hi - lo + 1));
   switch (pick) {
     case 0: {
-      const v = n(45, 60) * 1000; // $45B..$60B in a 10-second Blitz
-      return {
-        text: `10s BLITZ: cause $${v / 1000}B of damage`,
-        check: (s) => s.game === 'blitz' && s.seconds === 10 && s.damage >= v,
-      };
+      const v = n(8, 14) * 1000;
+      return { text: `RAMPAGE: cause $${v / 1000}B of damage`, check: (s) => s.game === 'rampage' && s.damage >= v };
     }
     case 1: {
-      const v = n(10, 14);
+      const v = n(4, 7);
       return { text: `HELI HUNT: catch ${v} helicopters`, check: (s) => s.game === 'heli' && s.catches >= v };
     }
     case 2: {
       const v = n(10, 14);
-      return { text: `MISSIONS: clear ${v} missions`, check: (s) => s.game === 'missions' && s.cleared >= v };
+      return { text: `HELI HUNT: catch ${Math.round(v / 2)} helicopters`, check: (s) => s.game === 'heli' && s.catches >= Math.round(v / 2) };
     }
     case 3: {
       const v = n(12, 20) * 10;

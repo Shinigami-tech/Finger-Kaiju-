@@ -30,6 +30,11 @@ import {
   MeshBasicMaterial,
   MeshStandardMaterial,
   Object3D,
+  PlaneGeometry,
+  Shape,
+  ShapeGeometry,
+  Sprite,
+  SpriteMaterial,
   Pressed,
   Quaternion,
   RayInteractable,
@@ -341,6 +346,10 @@ export class GameSystem extends createSystem({
     godSpawnAt: 25,
     godDone: false,
     heliT: 8,
+    doubled: false,
+    pounding: false,
+    eatHintT: 0,
+    helpOpen: false,
     copT: 4,
     stunT: 0,
     prevMode: 'rampage' as GameMode,
@@ -546,6 +555,7 @@ export class GameSystem extends createSystem({
     this.golden = { mesh: gm, pos: new Vector3(), active: false, life: 0 };
     this.bayterek = this.buildBayterek();
     this.city.add(this.bayterek);
+    this.initOverlay();
 
     // shells
     const shellGeo = new SphereGeometry(0.0035, 10, 8);
@@ -768,9 +778,9 @@ export class GameSystem extends createSystem({
   }
 
   /* ---------------- game modes ---------------- */
-  /** the classic modes open up once campaign level 3 has a star */
+  /** the god modes used to unlock after campaign level 3; now they are always available */
   private modesLocked() {
-    return this.csave.stars[2] === 0 && !new URLSearchParams(location.search).has('unlockall');
+    return false; // Rampage and Heli Hunt (the god modes) are always open
   }
 
   private onMenuPick(pick: GameMode | 'blitz-time') {
@@ -831,7 +841,7 @@ export class GameSystem extends createSystem({
           campaign: [
             ['1', 'LEFT STICK walk  |  A punch  |  B jump on roofs'],
             ['2', 'X: GRAB a car, hold X to GNAW, A to THROW'],
-            ['3', 'Eat seeds. GOLDEN seed = 15 s GOD MODE'],
+            ['3', 'Eat seeds to heal. 5 seeds = SUPER PUNCH'],
           ],
           blitz: [
             ['1', 'TOUCH or PUNCH buildings to smash them'],
@@ -858,7 +868,7 @@ export class GameSystem extends createSystem({
           campaign: [
             ['1', 'WASD walk (SHIFT run)  |  SPACE jump on roofs'],
             ['2', 'E grab a car, hold E gnaw, J punch / throw'],
-            ['3', '+ / - zoom  |  eat seeds, find the GOLDEN one'],
+            ['3', '+ / - zoom  |  eat seeds to heal, H = move list'],
           ],
           blitz: [
             ['1', 'CLICK buildings to smash them'],
@@ -1916,7 +1926,7 @@ export class GameSystem extends createSystem({
 
     if (!this.fakeHands) this.hands.update(this.world.renderer, this.player, dt);
     // god mode with Quest controllers: each controller becomes a hamster paw (squeeze = fist, trigger = pinch)
-    if (this.camp.godT > 0 && !this.fakeHands) {
+    if (this.godHands() && !this.fakeHands) {
       for (const side of SIDES) {
         const pad = this.input.gamepads[side];
         if (!pad || this.hands.hands[side].tracked) continue;
@@ -1998,6 +2008,7 @@ export class GameSystem extends createSystem({
       }
     }
     this.updateCampaignUi(dt);
+    this.updateOverlay(dt);
     // 3-2-1-GO
     if (this.pendingStart && !this.rebuild && this.ready && (this.game !== 'campaign' || this.hero.ready)) {
       this.pendingStart = false;
@@ -2121,9 +2132,9 @@ export class GameSystem extends createSystem({
     }
     this.hurtT = Math.max(0, this.hurtT - dt);
     this.tipMat.color.set(this.hurtT > 0 ? 0xff4040 : this.zoom ? 0x6fe08a : 0xffe066);
-    this.monster.root.visible = this.settings.values.claws && this.camp.phase === 'off';
+    this.monster.root.visible = false;
     this.monster.update([this.hands.hands.left, this.hands.hands.right], this.placed, this.city, HALF, this.hurtT > 0 ? 1 : this.zoom ? 2 : 0);
-    this.paws.update([this.hands.hands.left, this.hands.hands.right], this.camp.godT > 0 && this.camp.phase === 'play');
+    this.paws.update([this.hands.hands.left, this.hands.hands.right], this.godHands() && this.placed);
     this.updateNudges();
     if (this.coach.mesh.visible && this.camp.phase !== 'off') {
       this.qYaw.setFromAxisAngle(this.b.set(0, 1, 0), this.anchorYaw);
@@ -2273,7 +2284,7 @@ export class GameSystem extends createSystem({
           if (o && o.position.distanceTo(p) < r + 0.012) this.killTank(e, 60, 'TANK ');
         }
         const hl = this.heli;
-        if (hl && hl.state === 'fly' && hl.obj.position.distanceTo(p) < r + 0.025) {
+        if (hl && hl.state === 'fly' && !(hl.evasive && this.game === 'heli') && hl.obj.position.distanceTo(p) < r + 0.025) {
           this.swatHeli(this.velToLocal(hand.wristVel, this.b).multiplyScalar(0.6));
         }
       }
@@ -2446,6 +2457,7 @@ export class GameSystem extends createSystem({
       f.obj.rotation.x += f.spin.x * dt;
       f.obj.rotation.y += f.spin.y * dt;
       f.obj.rotation.z += f.spin.z * dt;
+      if (Math.random() < 0.6) this.fx.puff(f.obj.position, 0.002, 1);
       if (f.obj.position.y > 0.004) continue;
       // impact
       this.flying.splice(i, 1);
@@ -2559,10 +2571,10 @@ export class GameSystem extends createSystem({
     let threat = 1e9;
     if (h.evasive && target) {
       threat = target.distanceTo(pos);
-      if (threat < 0.17 && h.goalT > 0.25) h.goalT = 0; // re-plan right now
+      if (threat < (this.game === 'heli' ? 0.3 : 0.17) && h.goalT > 0.2) h.goalT = 0; // re-plan right now
     }
     if (h.goalT <= 0 || pos.distanceTo(h.goal) < 0.05) {
-      if (h.evasive && target && threat < 0.3) {
+      if (h.evasive && target && threat < (this.game === 'heli' ? 0.45 : 0.3)) {
         this.b.copy(pos).sub(target).setY(0);
         if (this.b.lengthSq() < 1e-6) this.b.set(Math.random() - 0.5, 0, Math.random() - 0.5);
         this.b.normalize();
@@ -2570,10 +2582,11 @@ export class GameSystem extends createSystem({
         const side = (Math.random() - 0.5) * 1.6;
         const fx = this.b.x - this.b.z * side;
         const fz = this.b.z + this.b.x * side;
-        h.goal.set(pos.x + fx * 0.22, 0.07 + Math.random() * 0.15, pos.z + fz * 0.22);
+        const far = this.game === 'heli' ? 0.32 : 0.22;
+        h.goal.set(pos.x + fx * far, 0.07 + Math.random() * 0.15, pos.z + fz * far);
         h.goal.x = Math.max(-0.3, Math.min(0.3, h.goal.x));
         h.goal.z = Math.max(-0.3, Math.min(0.3, h.goal.z));
-        h.goalT = 0.6 + Math.random() * 0.5;
+        h.goalT = this.game === 'heli' ? 0.35 + Math.random() * 0.3 : 0.6 + Math.random() * 0.5;
       } else {
         const ang = Math.random() * Math.PI * 2;
         const r = 0.08 + Math.random() * 0.2;
@@ -2585,7 +2598,7 @@ export class GameSystem extends createSystem({
     const prevVz = h.vel.z;
     this.a.copy(h.goal).sub(pos);
     // only Heli Hunt gets the extra-fast chopper; Missions and Rampage keep their speed
-    const fast = h.evasive ? (this.game === 'heli' ? 3.3 : 2.3) * h.speed : 1;
+    const fast = h.evasive ? (this.game === 'heli' ? 4.3 : 2.3) * h.speed : 1;
     const maxSpeed = 0.11 * fast;
     this.a.setLength(Math.min(maxSpeed, this.a.length() * 1.2 * Math.sqrt(fast))).sub(h.vel); // desired - current
     const maxAcc = 0.12 * fast * fast * dt;
@@ -2899,11 +2912,11 @@ export class GameSystem extends createSystem({
           this.b.copy(s.v).setY(0).normalize();
           this.moveHero(this.b.x * 0.008, this.b.z * 0.008);
           this.c.copy(this.heroPos).setY(this.hero.form.height + 0.02);
-          this.fx.popup(this.c, `-${Math.round(this.diff.dmg * 0.75)} HP`, '#ff5a5a');
+          this.fx.popup(this.c, `-${Math.round(this.heroHitDamage())} HP`, '#ff5a5a');
           this.shakeT = 0.3;
           this.shakeAmp = this.settings.values.shake ? 0.002 : 0;
         }
-        this.hp = Math.max(0, this.hp - this.diff.dmg * (hero ? 0.75 : 1));
+        this.hp = Math.max(0, this.hp - (hero ? this.heroHitDamage() : this.diff.dmg));
         this.hurtT = 0.35;
         this.fx.spark(s.mesh.position, 12, 0.35, 0xff4040);
         this.c.copy(s.mesh.position).setY(s.mesh.position.y + 0.02);
@@ -3022,6 +3035,22 @@ export class GameSystem extends createSystem({
       return;
     }
     if (this.pendingStart || this.rebuild) return;
+    if (p.kind === 'help') {
+      this.toggleHelp();
+      return;
+    }
+    if (p.kind === 'card') {
+      const c = this.cui.offered[p.i];
+      if (!c || this.camp.phase !== 'won') return;
+      this.csave.take(c.id);
+      this.cui.offered = [];
+      this.sfx.roar(0.6);
+      this.sfx.combo(8);
+      this.fx.popup(this.c.copy(this.heroPos).setY(0.08), `${c.title}!`, c.color);
+      this.ticker.push(`UPGRADE: ${c.title} - ${c.lines.join(' ')}`, true);
+      if (c.id === 'fur') this.hp = this.hpMax;
+      return;
+    }
     if (p.kind === 'page') {
       if (this.camp.phase !== 'select') return;
       const np = Math.max(0, Math.min(CITIES.length - 1, this.cui.page + p.dir));
@@ -3128,11 +3157,13 @@ export class GameSystem extends createSystem({
     }
     if (this.zoomT < 1.8) this.zoomT = 2.2;
     this.spawnSeeds();
+    this.camp.doubled = false;
+    this.camp.pounding = false;
     this.hero.root.position.y = 0;
     this.hero.airborne = false;
     this.bubble.patch(this.city);
     for (const m of [sirenRedMat, sirenBlueMat, sirenOffMat]) this.bubble.patchMaterial(m);
-    this.hp = 100;
+    this.hp = this.hpMax;
   }
 
   private campaignEnd(win: boolean, reason: string) {
@@ -3151,7 +3182,10 @@ export class GameSystem extends createSystem({
     this.camp.shown = 0;
     this.camp.revealT = -0.6;
     const wasLocked = this.camp.level + 1 < LEVELS.length && !this.csave.unlocked(this.camp.level + 1);
+    const firstClear = this.csave.stars[this.camp.level] === 0;
     if (win) this.csave.record(this.camp.level, stars, used);
+    this.cui.offered = win && firstClear ? this.csave.offer(L.n) : [];
+    this.cui.drawCards(this.csave);
     this.camp.newForm = '';
     if (win && wasLocked) {
       const nf = formForLevel(LEVELS[this.camp.level + 1].n);
@@ -3497,6 +3531,180 @@ export class GameSystem extends createSystem({
     return true;
   }
 
+  /* ---------------- hamster HUD: health bar, food compass, seed icons, hints, move list ---------------- */
+  private hpBar!: Mesh;
+  private hpCtx!: CanvasRenderingContext2D;
+  private hpTex!: CanvasTexture;
+  private hpKey = '';
+  private compass!: Mesh;
+  private compassMat!: MeshBasicMaterial;
+  private seedIcons: Sprite[] = [];
+
+  private initOverlay() {
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 48;
+    this.hpCtx = c.getContext('2d')!;
+    this.hpTex = new CanvasTexture(c);
+    this.hpTex.colorSpace = SRGBColorSpace;
+    this.hpBar = new Mesh(new PlaneGeometry(0.075, 0.014), new MeshBasicMaterial({ map: this.hpTex, transparent: true, depthWrite: false, depthTest: false }));
+    this.hpBar.renderOrder = 25;
+    this.hpBar.visible = false;
+    this.world.createTransformEntity(this.hpBar);
+    // food compass: a glowing arrow on the ground around the hamster, pointing at the nearest seed
+    const sh = new Shape();
+    sh.moveTo(0, 1);
+    sh.lineTo(0.55, 0.15);
+    sh.lineTo(0.2, 0.15);
+    sh.lineTo(0.2, -0.6);
+    sh.lineTo(-0.2, -0.6);
+    sh.lineTo(-0.2, 0.15);
+    sh.lineTo(-0.55, 0.15);
+    sh.closePath();
+    const geo = new ShapeGeometry(sh);
+    geo.rotateX(-Math.PI / 2);
+    geo.rotateY(Math.PI); // arrow tip towards +Z
+    this.compassMat = new MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.85, depthWrite: false, blending: AdditiveBlending });
+    this.compass = new Mesh(geo, this.compassMat);
+    this.compass.renderOrder = 3;
+    this.compass.visible = false;
+    this.city.add(this.compass);
+    // seed icons that float above every seed (seen from across the city)
+    const ic = document.createElement('canvas');
+    ic.width = ic.height = 64;
+    const g = ic.getContext('2d')!;
+    g.fillStyle = 'rgba(255,207,58,0.95)';
+    g.beginPath();
+    g.arc(32, 32, 28, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#2b2622';
+    g.beginPath();
+    g.ellipse(32, 32, 11, 18, 0.4, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = '#e9e2cf';
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(26, 20);
+    g.lineTo(38, 44);
+    g.stroke();
+    const it = new CanvasTexture(ic);
+    it.colorSpace = SRGBColorSpace;
+    const sm = new SpriteMaterial({ map: it, depthTest: false, depthWrite: false, transparent: true });
+    for (const _ of this.seeds) {
+      const sp = new Sprite(sm);
+      sp.renderOrder = 24;
+      sp.visible = false;
+      this.city.add(sp);
+      this.seedIcons.push(sp);
+    }
+    this.settings.onControls = () => this.toggleHelp(true);
+  }
+
+  /** Rampage and Heli Hunt are the god modes: your hands (or controllers) are giant hamster paws */
+  private godHands() {
+    return (this.camp.phase === 'off' && (this.game === 'rampage' || this.game === 'heli')) || this.camp.godT > 0;
+  }
+
+  private toggleHelp(open?: boolean) {
+    this.camp.helpOpen = open ?? !this.camp.helpOpen;
+    this.sfx.pop();
+  }
+
+  private updateOverlay(dt: number) {
+    const play = this.camp.phase === 'play' || this.camp.phase === 'intro';
+    const zv = this.zoomV;
+    const hero = this.hero;
+    // health bar over the hamster
+    this.hpBar.visible = play && hero.root.visible;
+    if (this.hpBar.visible) {
+      hero.root.getWorldPosition(this.hpBar.position);
+      this.hpBar.position.y += hero.form.height * zv * 1.25 + 0.02;
+      this.hpBar.lookAt(this.head);
+      const max = this.hpMax;
+      const key = `${Math.round(this.hp)}/${max}`;
+      if (key !== this.hpKey) {
+        this.hpKey = key;
+        const g = this.hpCtx;
+        g.clearRect(0, 0, 256, 48);
+        g.fillStyle = 'rgba(14,10,34,0.85)';
+        g.beginPath();
+        g.roundRect(2, 2, 252, 44, 14);
+        g.fill();
+        const k = Math.max(0, Math.min(1, this.hp / max));
+        g.fillStyle = k > 0.5 ? '#6fe08a' : k > 0.25 ? '#ffcf3a' : '#ff5a5a';
+        g.beginPath();
+        g.roundRect(8, 8, Math.max(16, 240 * k), 32, 10);
+        g.fill();
+        g.fillStyle = '#fff';
+        g.font = '900 26px system-ui, sans-serif';
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        g.fillText(`❤ ${Math.round(this.hp)} / ${max}`, 128, 25);
+        this.hpTex.needsUpdate = true;
+      }
+    }
+    // compass to the nearest food (the golden seed wins)
+    let tx = 0;
+    let tz = 0;
+    let best = 1e9;
+    let gold = false;
+    if (this.camp.phase === 'play') {
+      if (this.golden.active) {
+        tx = this.golden.pos.x;
+        tz = this.golden.pos.z;
+        best = 0;
+        gold = true;
+      } else {
+        for (const sd of this.seeds) {
+          if (!sd.active) continue;
+          const d = Math.hypot(sd.pos.x - this.heroPos.x, sd.pos.z - this.heroPos.z);
+          if (d < best) {
+            best = d;
+            tx = sd.pos.x;
+            tz = sd.pos.z;
+          }
+        }
+      }
+    }
+    const show = best < 1e8 && Math.hypot(tx - this.heroPos.x, tz - this.heroPos.z) > this.hero.radius * 2.5;
+    this.compass.visible = show && hero.root.visible;
+    if (this.compass.visible) {
+      const yaw = Math.atan2(tx - this.heroPos.x, tz - this.heroPos.z);
+      const r = this.hero.radius * 2.6;
+      this.compass.position.set(this.heroPos.x + Math.sin(yaw) * r, hero.ground + 0.0015, this.heroPos.z + Math.cos(yaw) * r);
+      this.compass.rotation.set(0, yaw, 0);
+      this.compass.scale.setScalar(this.hero.radius * (1.1 + Math.sin(this.now * 6) * 0.12));
+      this.compassMat.color.set(gold ? 0xffb400 : 0xffe066);
+    }
+    // seed icons
+    this.seeds.forEach((sd, i) => {
+      const ic = this.seedIcons[i];
+      ic.visible = sd.active && this.camp.phase === 'play';
+      if (!ic.visible) return;
+      const s = 0.018 / zv;
+      ic.scale.set(s, s, 1);
+      ic.position.set(sd.pos.x, sd.pos.y + 0.012 + s * 0.6 + Math.sin(this.now * 3 + i) * 0.002, sd.pos.z);
+    });
+    // "you can eat this!" hint when standing next to a car
+    this.camp.eatHintT = Math.max(0, this.camp.eatHintT - dt);
+    if (this.camp.phase === 'play' && !this.camp.held && this.camp.eatHintT <= 0 && this.grabbable(this.hero.radius + this.hero.form.height * 0.45)) {
+      this.camp.eatHintT = 6;
+      this.c.copy(this.heroPos).setY(this.hero.root.position.y + this.hero.form.height + 0.02);
+      this.fx.popup(this.c, this.wasImmersive ? 'X: GRAB  |  HOLD X: EAT' : 'E: GRAB  |  HOLD E: EAT', '#9ef0ff');
+    }
+    // move list in front of your eyes
+    const hm = this.cui.help.mesh;
+    hm.visible = this.camp.helpOpen;
+    if (hm.visible) {
+      this.player.head.getWorldQuaternion(this.q);
+      if (!this.wasImmersive) this.world.camera.getWorldQuaternion(this.q);
+      this.a.set(0, -0.05, -0.75).applyQuaternion(this.q);
+      hm.position.copy(this.head).add(this.a);
+      hm.lookAt(this.head);
+    }
+    if (this.input.keyboard.getKeyDown('KeyH')) this.toggleHelp();
+  }
+
   /* ---------------- police officers (campaign) ---------------- */
   private cops: {
     obj: Object3D;
@@ -3628,7 +3836,7 @@ export class GameSystem extends createSystem({
       if (d > stopAt) {
         c.state = 'run';
         this.copAnim(c, 'sprint');
-        const sp = 0.06 * dt;
+        const sp = 0.06 * (1 + 0.03 * L.n) * dt;
         c.obj.position.x += (dx / d) * sp;
         c.obj.position.z += (dz / d) * sp;
         // slide around buildings
@@ -3650,7 +3858,7 @@ export class GameSystem extends createSystem({
       }
       c.cd -= dt;
       if (c.cd <= 0 && d < 0.16 && this.camp.godT <= 0) {
-        c.cd = 1.6 + Math.random() * 0.8;
+        c.cd = (1.6 + Math.random() * 0.8) / (1 + 0.04 * L.n);
         this.fire(this.a.copy(c.obj.position).setY(0.014), this.b.copy(this.heroPos).setY(this.hero.root.position.y + form.height * 0.5), 0.3);
       }
       // brave ones try to tackle the hamster: it freezes for a moment
@@ -3889,8 +4097,9 @@ export class GameSystem extends createSystem({
     }
     this.golden.active = false;
     this.golden.mesh.visible = false;
-    this.camp.godSpawnAt = 18 + Math.random() * 14;
-    this.camp.godDone = false;
+    // god mode lives in Rampage and Heli Hunt only: seeds just heal
+    this.camp.godSpawnAt = 1e9;
+    this.camp.godDone = true;
   }
 
   private updateSeeds(dt: number) {
@@ -3911,10 +4120,11 @@ export class GameSystem extends createSystem({
       sd.active = false;
       sd.mesh.visible = false;
       this.camp.seeds++;
-      this.time += 3;
-      this.hp = Math.min(100, this.hp + 15);
+      const ck = this.csave.up.cheeks;
+      this.time += 3 + 2 * ck;
+      this.hp = Math.min(this.hpMax, this.hp + 15 + 8 * ck);
       this.c.copy(sd.mesh.position).setY(sd.pos.y + 0.03);
-      this.fx.popup(this.c, '+3s  NOM!', '#ffe9a6');
+      this.fx.popup(this.c, `+${3 + 2 * ck}s  +${15 + 8 * ck} HP`, '#ffe9a6');
       this.fx.spark(this.c, 8, 0.2, 0xffe066);
       this.sfx.pop();
       this.sfx.combo(2 + (this.camp.seeds % 5));
@@ -4164,7 +4374,7 @@ export class GameSystem extends createSystem({
       }
       const chewing = !!this.camp.held && (grabHeld || this.camp.autoChew) && !grab;
       if (mag > 0 && !chewing) {
-        const sp = form.speed * (run ? 1.9 : 1) * Math.max(0.35, mag) * (this.camp.held ? 0.8 : 1);
+        const sp = form.speed * (1 + 0.12 * this.csave.up.speed) * (run ? 1.9 : 1) * Math.max(0.35, mag) * (this.camp.held ? 0.8 : 1);
         const ok = this.moveHero(mx * sp * dt, mz * sp * dt);
         const want = Math.atan2(mx, mz);
         hero.yaw += wrapAngle(want - hero.yaw) * Math.min(1, dt * 12);
@@ -4219,9 +4429,25 @@ export class GameSystem extends createSystem({
         if (grab && !this.tryGrabVehicle()) punch = true;
         if (punch) hero.attack('punch');
       }
+      const v = Math.sqrt(2 * form.height * 40 * form.height * 1.7 * (1 + 0.18 * this.csave.up.jump));
       if (jump) {
-        const v = Math.sqrt(2 * form.height * 40 * form.height * 1.7);
-        if (hero.jump(v)) this.sfx.pop();
+        if (hero.jump(v)) {
+          this.sfx.pop();
+          this.camp.doubled = false;
+        } else if (hero.airborne && !this.camp.doubled && this.csave.up.double > 0 && !hero.carried) {
+          // double jump: a second hop in mid air
+          this.camp.doubled = true;
+          hero.vy = v * 0.9;
+          hero.land(-0.2);
+          this.fx.ring(this.c.copy(this.heroPos).setY(hero.root.position.y), 0.03, 0x5ff0ff, 0.35);
+          this.sfx.pop();
+        }
+      }
+      // quake pound: double jump, then punch in the air -> slam down into an earthquake
+      if (punch && hero.airborne && this.camp.doubled && this.csave.up.pound > 0 && !this.camp.pounding) {
+        this.camp.pounding = true;
+        hero.vy = -v * 2.2;
+        this.fx.popup(this.c.copy(this.heroPos).setY(hero.root.position.y + form.height), 'QUAKE POUND!', '#ff8a3a');
       }
     } else hero.moving = 0;
 
@@ -4244,7 +4470,12 @@ export class GameSystem extends createSystem({
           hero.airborne = false;
           hero.land(impact);
           this.fx.puff(this.c.copy(this.heroPos).setY(ground + 0.001), 0.002, 4);
-          if (ground > 0 && impact > form.height * 4 && ph === 'play') this.roofSlam();
+          if (this.camp.pounding && ph === 'play') {
+            this.camp.pounding = false;
+            this.quake(this.a.copy(this.heroPos).setY(0));
+            if (ground > 0) this.roofSlam();
+          } else if (ground > 0 && impact > form.height * 4 && ph === 'play') this.roofSlam();
+          this.camp.doubled = false;
           hero.vy = 0;
         }
       } else y = ground;
@@ -4311,12 +4542,29 @@ export class GameSystem extends createSystem({
     this.shakeAmp = this.settings.values.shake ? 0.0018 : 0;
   }
 
-  /** one hit on a building: wobble, or down it when its hits run out */
-  private damageBuilding(e: Entity, at: Vector3, label: string) {
+  /** hamster punch damage (building HP = its height in mm) */
+  /** what one bullet / shell does to the hamster: the defense gets tougher every level */
+  private heroHitDamage() {
+    const n = LEVELS[this.camp.level]?.n ?? 1;
+    return this.diff.dmg * 0.75 * (1 + 0.05 * (n - 1));
+  }
+
+  private get hpMax() {
+    return 100 + 25 * this.csave.up.fur;
+  }
+
+  private heroDamage() {
+    const u = this.csave.up;
+    return Math.round((this.hero.form.power * 1000 / 3) * (1 + 0.25 * u.power) * (this.camp.powerT > 0 ? 3 : 1));
+  }
+
+  /** one hit on a building: shows the damage dealt and the HP left, downs it at 0 */
+  private damageBuilding(e: Entity, at: Vector3, label: string, mult = 1) {
     const form = this.hero.form;
     const o = e.object3D!;
     const h = e.getValue(Building, 'height') ?? 0.05;
-    if (h > form.power * (this.camp.powerT > 0 ? 1.4 : 1)) {
+    const reach = form.power * (1 + 0.1 * this.csave.up.power) * (this.camp.powerT > 0 ? 1.4 : 1);
+    if (h > reach) {
       this.wobble(e, o, 0.025, 0);
       this.fx.spark(at, 6, 0.2, 0xffffff);
       this.sfx.metal();
@@ -4326,8 +4574,9 @@ export class GameSystem extends createSystem({
       }
       return;
     }
-    const need = this.camp.powerT > 0 ? 1 : Math.max(1, Math.ceil((3 * h) / form.power));
-    const left = Math.min(need, this.camp.hits.get(e.index) ?? need) - 1;
+    const max = Math.max(10, Math.round(h * 1000));
+    const dmg = Math.round(this.heroDamage() * mult);
+    const left = Math.max(0, (this.camp.hits.get(e.index) ?? max) - dmg);
     this.camp.hits.set(e.index, left);
     this.sfx.punch();
     this.hitStop(0.05);
@@ -4335,12 +4584,13 @@ export class GameSystem extends createSystem({
     this.shakeAmp = this.settings.values.shake ? 0.0012 : 0;
     if (left <= 0) {
       this.smash(e, at, 2.2, 1, label);
+      this.fx.popup(this.b.copy(at).setY(h * 0.5 + 0.03), `-${dmg}  DESTROYED!`, '#ffcf3a');
       this.hitStop(0.09);
     } else {
       this.wobble(e, o, 0.06, 0);
       this.fx.puff(at, 0.01, 5);
       this.fx.spark(at, 8, 0.25);
-      this.fx.popup(this.a.copy(at).setY(h + 0.015), `${left} MORE`, '#ffffff');
+      this.fx.popup(this.a.copy(at).setY(h + 0.015), `-${dmg}   ${left}/${max} HP`, '#ffffff');
     }
   }
 
@@ -4405,13 +4655,16 @@ export class GameSystem extends createSystem({
     const on = ph !== 'off' && this.placed;
     const showCards = on && ph === 'select' && !this.rebuild;
     const showBoard = on && ph !== 'select';
-    const showResult = on && (ph === 'won' || ph === 'lost') && this.camp.revealT > 1.2;
+    const showCardsUp = on && ph === 'won' && this.camp.revealT > 1.2 && this.cui.offered.length > 0;
+    const showResult = on && (ph === 'won' || ph === 'lost') && this.camp.revealT > 1.2 && !showCardsUp;
     for (const b of this.cui.levelCards) b.plane.mesh.visible = showCards;
     for (const b of this.cui.pageButtons) b.plane.mesh.visible = showCards && b.enabled;
     this.cui.back.plane.mesh.visible = showCards;
     this.cui.board.mesh.visible = showBoard;
     for (const b of this.cui.resultButtons) b.plane.mesh.visible = showResult;
     for (const b of this.cui.zoomButtons) b.plane.mesh.visible = on && ph !== 'select';
+    this.cui.cards.forEach((b, i) => (b.plane.mesh.visible = showCardsUp && i < this.cui.offered.length));
+    this.cui.helpButton.plane.mesh.visible = on;
     if (!on) return;
     this.qYaw.setFromAxisAngle(this.b.set(0, 1, 0), this.anchorYaw);
     const place = (m: Mesh, x: number, y: number, z: number, bob = 0) => {
@@ -4435,6 +4688,9 @@ export class GameSystem extends createSystem({
       vis.forEach((b, i) => place(b.plane.mesh, (i - (vis.length - 1) / 2) * 0.115, 0.075, 0.33));
     }
     this.cui.zoomButtons.forEach((b, i) => place(b.plane.mesh, 0.37, 0.09 - i * 0.045, 0.12));
+    if (ph === 'select') place(this.cui.helpButton.plane.mesh, 0.42, 0.2, 0.3);
+    else place(this.cui.helpButton.plane.mesh, 0.37, 0.135, 0.12);
+    if (showCardsUp) this.cui.cards.forEach((b, i) => place(b.plane.mesh, (i - (this.cui.offered.length - 1) / 2) * 0.1, 0.12, 0.34, Math.sin(t * 2 + i) * 0.003));
     // star reveal on the result card
     if (ph === 'won' || ph === 'lost') {
       this.camp.revealT += dt;
@@ -4462,6 +4718,7 @@ export class GameSystem extends createSystem({
         countdown: this.countdown,
         best: this.csave.stars[this.camp.level],
         seeds: this.camp.seeds,
+        hpMax: this.hpMax,
         god: this.camp.godT,
         holding: !!this.camp.held,
       };
@@ -4471,7 +4728,9 @@ export class GameSystem extends createSystem({
     if (pick) this.onCampaignPick(pick);
     // desktop shortcuts
     const kb = this.input.keyboard;
-    if (ph === 'won' || ph === 'lost') {
+    if (ph === 'won' && this.cui.offered.length) {
+      for (let i = 0; i < 3; i++) if (kb.getKeyDown(`Digit${i + 1}`)) this.onCampaignPick({ kind: 'card', i });
+    } else if (ph === 'won' || ph === 'lost') {
       if (kb.getKeyDown('KeyR')) this.onCampaignPick({ kind: 'retry' });
       if (kb.getKeyDown('KeyN')) this.onCampaignPick({ kind: 'next' });
       if (kb.getKeyDown('KeyL')) this.onCampaignPick({ kind: 'levels' });
