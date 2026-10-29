@@ -20,7 +20,7 @@ export interface HudState {
   grade?: string;
   hint?: string;
   wave?: number;
-  game?: 'blitz' | 'heli' | 'missions' | 'rampage';
+  game?: 'campaign' | 'blitz' | 'heli' | 'missions' | 'rampage';
   countdown?: number;
   catches?: number;
   lives?: number;
@@ -116,7 +116,7 @@ export class Hud {
       title(s.hint ?? 'Look at your desk', 350, 40, '#a9a3d6');
     } else if (s.mode === 'ready' || (s.mode === 'playing' && (s.countdown ?? 0) > 0)) {
       const cd = Math.ceil((s.countdown ?? 0) - 0.4);
-      const names = { blitz: 'BLITZ', heli: 'HELI HUNT', missions: 'MISSIONS', rampage: 'RAMPAGE' };
+      const names = { campaign: 'CAMPAIGN', blitz: 'BLITZ', heli: 'HELI HUNT', missions: 'MISSIONS', rampage: 'RAMPAGE' };
       if (s.mode === 'playing') {
         title(names[s.game ?? 'rampage'], 110, 70, '#a9a3d6');
         title(cd > 0 ? String(cd) : 'GO!', 290, 220, cd > 0 ? '#ffcf3a' : '#6fe08a');

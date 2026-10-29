@@ -94,6 +94,8 @@ export class Fx {
   half = 0.34;
   /** effects quality 0..1 (scales particle counts) */
   quality = 1;
+  /** popup text size multiplier (smaller when the city is zoomed in) */
+  textScale = 1;
   private dustDay = new Color(0xe8e2d6);
   private dustNight = new Color(0x5e5a62);
 
@@ -335,7 +337,7 @@ export class Fx {
       p.sprite.position.y += dt * 0.05;
       p.sprite.material.opacity = Math.min(1, (1.1 - p.t) * 3);
       const pop = p.t < 0.12 ? 0.6 + (p.t / 0.12) * 0.6 : 1.2 - Math.min(0.2, (p.t - 0.12));
-      p.sprite.scale.set(0.08 * pop, 0.02 * pop, 1);
+      p.sprite.scale.set(0.08 * pop * this.textScale, 0.02 * pop * this.textScale, 1);
       if (p.t > 1.1) p.sprite.visible = false;
     }
     void this.m;

@@ -1,0 +1,4 @@
+Hero characters (all CC0 1.0 / public domain):
+- human.glb: Kenney "Mini Characters" (kenney.nl), CC0.
+- gorilla.glb (Yeti, recoloured in-game), dino.glb: Quaternius "Ultimate Monsters" (quaternius.com), CC0.
+- robot.glb: "RobotExpressive" by Tomas Laulhe (Quaternius), modified by Don McCurdy, CC0 (three.js examples).

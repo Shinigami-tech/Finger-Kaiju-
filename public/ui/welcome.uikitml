@@ -81,16 +81,15 @@
     <div class="heading">FINGER KAIJU</div>
     <Divider></Divider>
     <div class="sub-heading">
-      Your desk becomes a tiny city. Your hand becomes a giant monster. Put on a Quest, enter mixed reality and pick a game: Blitz, Heli Hunt, Missions or Rampage.
+      Your desk becomes a tiny Tokyo. Walk its streets as a giant, smash the goals and win 3 stars per level: finish, be fast, hurt nobody. Grow from human to gorilla, robot, dinosaur and kaiju.
     </div>
-    <div class="controls-title">HANDS</div>
-    <div class="control">Touch / punch: smash buildings</div>
-    <div class="control">Pinch or fist: grab, rip off, throw</div>
-    <div class="control">Squeeze the fist: crush what you hold</div>
-    <div class="control">Slam your palm: earthquake</div>
-    <div class="control">Pinch with both hands: zoom and rotate</div>
+    <div class="controls-title">CAMPAIGN (QUEST)</div>
+    <div class="control">Left stick: walk  |  A / trigger: punch  |  B: jump</div>
+    <div class="control">Right stick or + / - buttons: zoom in and out</div>
+    <div class="control">Hands: pinch the ground to walk, pinch a building to smash it</div>
+    <div class="control">Grip + point at any surface: move the city there</div>
     <div class="controls-title">DESKTOP</div>
-    <div class="control">Click a card to play, click to smash, Space: quake</div>
+    <div class="control">WASD walk, Shift run, J punch, K kick, Space jump, +/- zoom</div>
   </div>
   <Button id="xr-button" class="button">
     <ButtonIcon>

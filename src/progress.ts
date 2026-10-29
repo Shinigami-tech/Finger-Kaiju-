@@ -7,7 +7,7 @@
  */
 
 export interface RoundStats {
-  game: 'blitz' | 'heli' | 'missions' | 'rampage';
+  game: 'campaign' | 'blitz' | 'heli' | 'missions' | 'rampage';
   damage: number;
   catches: number;
   cleared: number;

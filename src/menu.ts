@@ -5,7 +5,7 @@
 import { CanvasTexture, Group, Mesh, MeshBasicMaterial, PlaneGeometry, SRGBColorSpace, Vector3 } from '@iwsdk/core';
 import type { HandData } from './hands.js';
 
-export type GameMode = 'blitz' | 'heli' | 'missions' | 'rampage';
+export type GameMode = 'campaign' | 'blitz' | 'heli' | 'missions' | 'rampage';
 
 export interface ModeInfo {
   id: GameMode;
@@ -21,6 +21,23 @@ export const CARD_W = 0.105;
 export const CARD_H = (CARD_W * CH) / CW;
 
 export const MODES: ModeInfo[] = [
+  {
+    id: 'campaign',
+    title: 'CAMPAIGN',
+    lines: ['Walk the city as a giant.', 'Win all 3 stars!'],
+    color: '#ffcf3a',
+    icon: (g, x, y) => {
+      g.fillStyle = '#fff';
+      g.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const a = -Math.PI / 2 + (i * Math.PI) / 5;
+        const r = i % 2 === 0 ? 100 : 44;
+        g.lineTo(x + Math.cos(a) * r, y + 8 + Math.sin(a) * r);
+      }
+      g.closePath();
+      g.fill();
+    },
+  },
   {
     id: 'blitz',
     title: 'BLITZ',
@@ -100,6 +117,7 @@ export const MODES: ModeInfo[] = [
   },
 ];
 
+export const BLITZ_INDEX = MODES.findIndex((m) => m.id === 'blitz');
 export const CHIP_W = 0.046;
 export const CHIP_H = 0.022;
 /** 10s Blitz round lengths (0 = endless) */
@@ -151,7 +169,7 @@ export class ModeMenu {
     this.chip.name = 'BlitzTimeChip';
     this.chip.renderOrder = 7;
     this.chip.position.set(CARD_W / 2 - CHIP_W / 2 + 0.008, CARD_H / 2 - CHIP_H / 2 + 0.004, 0.002);
-    this.cards[0].add(this.chip);
+    this.cards[BLITZ_INDEX].add(this.chip);
   }
 
   drawChip(seconds: number) {
@@ -169,7 +187,7 @@ export class ModeMenu {
   }
 
   /** redraw the cards (best scores change) */
-  draw(bests: string[]) {
+  draw(bests: string[], locked: boolean[] = []) {
     MODES.forEach((m, i) => {
       const g = this.ctx[i];
       g.clearRect(0, 0, CW, CH);
@@ -195,7 +213,18 @@ export class ModeMenu {
       m.lines.forEach((l, k) => g.fillText(l, CW / 2, 460 + k * 38));
       g.font = '800 34px system-ui, sans-serif';
       g.fillStyle = '#ffcf3a';
-      g.fillText(`BEST ${bests[i]}`, CW / 2, 580);
+      g.fillText(m.id === 'campaign' ? bests[i] : `BEST ${bests[i]}`, CW / 2, 580);
+      if (locked[i]) {
+        g.fillStyle = 'rgba(10,8,20,0.78)';
+        rr(g, 10, 10, CW - 20, CH - 20, 48);
+        g.fill();
+        g.fillStyle = '#fff';
+        g.font = '900 120px system-ui, sans-serif';
+        g.fillText('\u{1F512}', CW / 2, 250);
+        g.font = '800 34px system-ui, sans-serif';
+        g.fillText('Clear CAMPAIGN', CW / 2, 400);
+        g.fillText('level 3 to unlock', CW / 2, 445);
+      }
       this.tex[i].needsUpdate = true;
     });
   }
@@ -248,7 +277,7 @@ export class ModeMenu {
             if (Math.abs(this.v.x) < CARD_W / 2 && Math.abs(this.v.y) < CARD_H / 2 && Math.abs(this.v.z) < 0.015) hit = true;
           }
         }
-        if (i === 0 && onChip) hit = false;
+        if (i === BLITZ_INDEX && onChip) hit = false;
         if (hit && !this.inside[i][h] && this.cool === 0) {
           picked = MODES[i].id;
           this.cool = 0.8;

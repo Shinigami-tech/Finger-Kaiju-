@@ -39,7 +39,7 @@
       "grabbing": false,
       "physics": false,
       "sceneUnderstanding": true,
-      "environmentRaycast": false,
+      "environmentRaycast": true,
       "spatialUI": {
         "kit": "horizon"
       }

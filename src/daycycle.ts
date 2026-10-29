@@ -71,7 +71,7 @@ export class DayCycle {
   private cA = new Color();
   private cB = new Color();
   private e = new Object3D();
-  private dir = new Vector3();
+  readonly dir = new Vector3();
 
   constructor(
     private sun: DirectionalLight,

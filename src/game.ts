@@ -17,6 +17,10 @@ import {
   createSystem,
   DirectionalLight,
   Entity,
+  EnvironmentRaycastTarget,
+  InputComponent,
+  RaycastSpace,
+  RingGeometry,
   Group,
   HemisphereLight,
   IcosahedronGeometry,
@@ -62,6 +66,9 @@ import {
   TILE,
 } from './kit-city.js';
 import { MonsterHands } from './monster-hands.js';
+import { Bubble } from './bubble.js';
+import { BoardState, CampaignSave, CampaignUi, LEVELS, UiPick } from './campaign.js';
+import { formForLevel, Hero } from './hero.js';
 import { Ruins } from './ruins.js';
 import { kitAssetId } from './kit-manifest.js';
 import { CALM_MUSIC_ID, MUSIC_ID, SFX_FILES, sfxAssetId } from './sfx-manifest.js';
@@ -229,10 +236,61 @@ export class GameSystem extends createSystem({
   private monster = new MonsterHands();
   private day!: DayCycle;
   private hitStopT = 0;
+  /* ---- campaign ---- */
+  private hero!: Hero;
+  private bubble = new Bubble();
+  private cui = new CampaignUi();
+  private csave = new CampaignSave();
+  private sun!: DirectionalLight;
+  private sunTarget = new Object3D();
+  /** where the city sits on the real table (world) and which way it faces */
+  private anchor = new Vector3(0, 0.72, -0.62);
+  private anchorYaw = 0;
+  private qYaw = new Quaternion();
+  private zoomT = 1;
+  private zoomV = 1;
+  private focus = new Vector3();
+  private heroPos = new Vector3();
+  private reticle!: Mesh;
+  private reticleEntity!: Entity;
+  private placing = false;
+  private pinchZoom: { d0: number; z0: number } | null = null;
+  private camp = {
+    phase: 'off' as 'off' | 'select' | 'intro' | 'play' | 'won' | 'lost',
+    level: 0,
+    hurt: 0,
+    stars: 0,
+    shown: 0,
+    revealT: 0,
+    reason: '',
+    newForm: '',
+    progress: { marked: 0, buildings: 0, cars: 0, tanks: 0 },
+    targets: [] as Entity[],
+    hits: new Map<number, number>(),
+    stepT: 0,
+    tooBigT: 0,
+    tankT: 0,
+    goTo: null as Vector3 | null,
+    goEntity: null as Entity | null,
+    /** a car or tank to chase and punch */
+    goActor: null as Object3D | null,
+    carry: null as Side | null,
+    path: [] as Vector3[],
+    blockT: 0,
+    prevMode: 'rampage' as GameMode,
+  };
   /** dev/testing: pin the time of day (null = follow the round) */
   dayLock: number | null = null;
   /** dev/testing: city-local point the desktop camera looks at */
   debugLook: Vector3 | null = null;
+  /** dev/testing: virtual stick + punch for scripted campaign tests */
+  testInput: { x: number; y: number; punch?: boolean; run?: boolean } | null = null;
+  /** dev/testing: ?campaign=N jumps straight into campaign level N */
+  private autoLevel = (() => {
+    if (!import.meta.env.DEV) return -1;
+    const v = new URLSearchParams(location.search).get('campaign');
+    return v ? Math.max(0, Math.min(LEVELS.length - 1, Number(v) - 1)) : -1;
+  })();
   /** dev/testing: hand data is written by a test script instead of WebXR */
   fakeHands = false;
   private newsFlags = new Set<string>();
@@ -296,7 +354,7 @@ export class GameSystem extends createSystem({
   private missionGap = 0;
   private lastMission = '';
   private markers: Mesh[] = [];
-  private bests: Record<GameMode, number> = { blitz: 0, heli: 0, missions: 0, rampage: 0 };
+  private bests: Record<GameMode, number> = { campaign: 0, blitz: 0, heli: 0, missions: 0, rampage: 0 };
   private elapsed = 0;
   private damage = 0;
   private best = 0;
@@ -355,7 +413,9 @@ export class GameSystem extends createSystem({
 
     const sun = new DirectionalLight(0xfff1d6, 2.4);
     sun.position.set(0.6, 0.9, 0.4);
-    sun.target = this.city;
+    sun.target = this.sunTarget;
+    this.city.add(this.sunTarget);
+    this.sun = sun;
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
     sun.shadow.bias = -0.0006;
@@ -369,6 +429,24 @@ export class GameSystem extends createSystem({
     this.city.add(this.ruins.root);
     this.city.add(this.monster.shadows);
     this.world.createTransformEntity(this.monster.root);
+
+    // campaign hero, diorama rim, campaign UI, placement reticle
+    this.hero = new Hero((id) => AssetManager.loadGLTFById(id));
+    this.city.add(this.hero.root);
+    this.world.createTransformEntity(this.bubble.rim);
+    const cuiEntity = this.world.createTransformEntity(this.cui.root);
+    this.cui.buttons.forEach((b, k) => {
+      const be = this.world.createTransformEntity(b.plane.mesh, { parent: cuiEntity });
+      be.addComponent(ModeCard, { index: 400 + k });
+      be.addComponent(RayInteractable);
+    });
+    this.reticle = new Mesh(
+      new RingGeometry(0.03, 0.04, 40).rotateX(-Math.PI / 2),
+      new MeshBasicMaterial({ color: 0x6fe08a, transparent: true, opacity: 0.9, depthWrite: false }),
+    );
+    this.reticle.name = 'PlaceReticle';
+    this.reticle.visible = false;
+    this.reticleEntity = this.world.createTransformEntity(this.reticle);
 
     // shells
     const shellGeo = new SphereGeometry(0.0035, 10, 8);
@@ -450,23 +528,30 @@ export class GameSystem extends createSystem({
     this.cleanupFuncs.push(
       this.queries.pressedBuildings.subscribe('qualify', (e) => {
         this.sfx.unlock();
-        if (!this.canScore()) return;
+        if (!this.canScore() || this.camp.phase !== 'off') return;
         const o = e.object3D;
         if (o) this.smash(e, this.a.copy(o.position).setY(o.position.y + 0.02), 1.2, 1);
       }),
       this.queries.pressedTanks.subscribe('qualify', (e) => {
         this.sfx.unlock();
+        if (this.camp.phase !== 'off') return;
         if (e.getValue(Tank, 'alive')) this.killTank(e, 60, 'TANK!');
       }),
       this.queries.pressedOrb.subscribe('qualify', () => this.restart()),
       this.queries.pressedCards.subscribe('qualify', (e) => {
         this.sfx.unlock();
         const i = e.getValue(ModeCard, 'index') ?? 0;
+        if (i >= 400) {
+          const b = this.cui.buttons[i - 400];
+          if (b && b.enabled && b.plane.mesh.visible) this.onCampaignPick(b.pick);
+          return;
+        }
+        if (this.camp.phase !== 'off') return;
         this.onMenuPick(i === 99 ? 'blitz-time' : MODES[i].id);
       }),
       this.queries.pressedVehicles.subscribe('qualify', (e) => {
         this.sfx.unlock();
-        if (!this.canScore()) return;
+        if (!this.canScore() || this.camp.phase !== 'off') return;
         const i = e.getValue(Vehicle, 'index') ?? 0;
         if (i < 0) {
           if (this.heli?.evasive) this.catchHeli();
@@ -497,7 +582,7 @@ export class GameSystem extends createSystem({
       const ce = this.world.createTransformEntity(card);
       ce.addComponent(ModeCard, { index: i });
       ce.addComponent(RayInteractable);
-      if (i === 0) {
+      if (MODES[i].id === 'blitz') {
         const chip = this.world.createTransformEntity(this.menu.chip, { parent: ce });
         chip.addComponent(ModeCard, { index: 99 });
         chip.addComponent(RayInteractable);
@@ -561,6 +646,7 @@ export class GameSystem extends createSystem({
 
   /** seconds on the clock for the current game mode (Infinity = no clock) */
   private modeTime() {
+    if (this.game === 'campaign') return LEVELS[this.camp.level].limit;
     if (this.game === 'blitz') return this.settings.values.blitz || Infinity;
     if (this.game === 'heli') return 30;
     if (this.game === 'missions') return Infinity;
@@ -568,6 +654,7 @@ export class GameSystem extends createSystem({
   }
 
   private bestText(m: GameMode) {
+    if (m === 'campaign') return `\u2605 ${this.csave.total} / ${LEVELS.length * 3}`;
     const b = this.bests[m];
     if (m === 'heli') return `${b} caught`;
     if (m === 'missions') return `${b} cleared`;
@@ -575,11 +662,29 @@ export class GameSystem extends createSystem({
   }
 
   private refreshMenu() {
-    this.menu.draw(MODES.map((m) => this.bestText(m.id)));
+    this.menu.draw(
+      MODES.map((m) => this.bestText(m.id)),
+      MODES.map((m) => m.id !== 'campaign' && this.modesLocked()),
+    );
   }
 
   /* ---------------- game modes ---------------- */
+  /** the classic modes open up once campaign level 3 has a star */
+  private modesLocked() {
+    return this.csave.stars[2] === 0 && !new URLSearchParams(location.search).has('unlockall');
+  }
+
   private onMenuPick(pick: GameMode | 'blitz-time') {
+    if (pick === 'campaign') {
+      if (this.menuOpen()) this.openCampaignSelect();
+      return;
+    }
+    if (pick !== 'blitz-time' && this.modesLocked()) {
+      if (!this.menuOpen()) return;
+      this.sfx.ouch();
+      this.ticker.push('LOCKED: clear CAMPAIGN level 3 to unlock the classic modes', true);
+      return;
+    }
     if (pick === 'blitz-time') {
       const i = BLITZ_TIMES.indexOf(this.settings.values.blitz);
       this.settings.set('blitz', BLITZ_TIMES[(i + 1) % BLITZ_TIMES.length]);
@@ -624,6 +729,11 @@ export class GameSystem extends createSystem({
     if (seen >= 3) return;
     const tips: Record<GameMode, [string, string][]> = xr
       ? {
+          campaign: [
+            ['1', 'LEFT STICK walk  |  A / TRIGGER punch'],
+            ['2', 'No controller? PINCH the ground to walk, PINCH a house to smash it'],
+            ['3', 'Right stick or + / - : zoom in and out'],
+          ],
           blitz: [
             ['1', 'TOUCH or PUNCH buildings to smash them'],
             ['2', 'SLAM your palm on the table = earthquake'],
@@ -646,6 +756,11 @@ export class GameSystem extends createSystem({
           ],
         }
       : {
+          campaign: [
+            ['1', 'W A S D walk  |  SHIFT run'],
+            ['2', 'J punch  |  K kick  |  SPACE jump'],
+            ['3', '+ / - zoom in and out'],
+          ],
           blitz: [
             ['1', 'CLICK buildings to smash them'],
             ['2', 'Press SPACE for an earthquake'],
@@ -693,6 +808,10 @@ export class GameSystem extends createSystem({
   /** called when the 3-2-1 countdown finishes */
   private beginGame() {
     this.startPlaying();
+    if (this.game === 'campaign') {
+      this.camp.phase = 'play';
+      this.ticker.push(`${LEVELS[this.camp.level].city}: ${LEVELS[this.camp.level].story.toUpperCase()}`, true);
+    }
     this.time = this.modeTime();
     if (this.game === 'heli') this.spawnHeli(true, 1);
     if (this.game === 'missions') {
@@ -820,6 +939,7 @@ export class GameSystem extends createSystem({
         if (!o || !e.getValue(Building, 'alive')) continue;
         const mk = this.markers[mi++];
         mk.visible = true;
+        mk.scale.setScalar(1);
         mk.position.set(o.position.x, o.position.y + (e.getValue(Building, 'height') ?? 0.05) + 0.06 + Math.sin(this.now * 5) * 0.006, o.position.z);
         mk.rotation.y += dt * 3;
       }
@@ -1023,6 +1143,8 @@ export class GameSystem extends createSystem({
       this.player.head.getWorldPosition(this.head);
       this.city.rotation.set(0, Math.atan2(this.head.x - pos.x, this.head.z - pos.z), 0);
     } else this.city.rotation.set(0, 0, 0);
+    this.anchor.copy(pos);
+    this.anchorYaw = this.city.rotation.y;
     this.city.visible = true;
     this.placed = true;
   }
@@ -1086,7 +1208,7 @@ export class GameSystem extends createSystem({
   /** Desktop: Space = earthquake at a random spot (handy without a headset). */
   private onKey() {
     const fn = (ev: KeyboardEvent) => {
-      if (ev.code !== 'Space' || !this.ready || !this.placed) return;
+      if (ev.code !== 'Space' || !this.ready || !this.placed || this.camp.phase !== 'off') return;
       ev.preventDefault();
       this.sfx.unlock();
       this.quake(new Vector3((Math.random() - 0.5) * 0.4, 0, (Math.random() - 0.5) * 0.4));
@@ -1304,6 +1426,7 @@ export class GameSystem extends createSystem({
     const inf = this.info.get(e.index);
     this.destroyed++;
     this.missionEvent('building', e);
+    this.campaignBuilding(e, o, w, inf?.depth ?? w);
     this.collapses.push({ obj: o, t: 0, tilt: (Math.random() - 0.5) * 0.6 });
     this.c.copy(o.position);
     this.fx.explode(this.c, fromLocal, w, h, inf?.palette ?? [0xcccccc], power);
@@ -1563,6 +1686,7 @@ export class GameSystem extends createSystem({
 
   private wreckCar(car: Car, from: Vector3) {
     this.missionEvent('car');
+    if (this.camp.phase === 'play') this.camp.progress.cars++;
     if (this.mode === 'playing') this.stat.cars++;
     car.state = 'dead';
     car.respawn = 5;
@@ -1631,6 +1755,7 @@ export class GameSystem extends createSystem({
     this.c.y += 0.035;
     if (this.mode === 'playing') this.score(bonus, this.c, label, '#9ef0ff');
     this.missionEvent('tank');
+    if (this.camp.phase === 'play') this.camp.progress.tanks++;
     if (this.mode === 'playing') this.stat.tanks++;
     for (const side of SIDES) {
       const hd = this.held[side];
@@ -1697,6 +1822,7 @@ export class GameSystem extends createSystem({
         this.world.camera.position.copy(this.city.position).add(this.debugCam).sub(this.player.position);
       }
       if (this.debugLook) this.world.camera.lookAt(this.city.localToWorld(this.c.copy(this.debugLook)));
+      else if (this.camp.phase !== 'off') this.world.camera.lookAt(this.c.copy(this.anchor).setY(this.anchor.y + 0.03));
       else this.world.camera.lookAt(this.c.copy(this.city.position).setY(this.city.position.y + 0.02));
       // on desktop the viewer is the camera, not the (unused) headset pose
       this.world.camera.getWorldPosition(this.head);
@@ -1707,6 +1833,7 @@ export class GameSystem extends createSystem({
       if (this.searchT > 6) this.placeInFront();
     }
 
+    this.campaignCamera(dt);
     this.city.updateMatrixWorld();
     this.updateTipMarkers();
     if (this.placed && this.ready) this.handleHands(dt);
@@ -1744,16 +1871,25 @@ export class GameSystem extends createSystem({
     this.updateRebuild(dt);
 
     // game-mode menu
-    const showMenu = this.placed && this.menuOpen();
+    const showMenu = this.placed && this.menuOpen() && this.camp.phase === 'off';
     for (const c of this.menu.cards) c.visible = showMenu;
     if (showMenu) {
       this.menu.layout((l, out) => this.city.localToWorld(out.copy(l)), HALF, this.head, this.city.scale.x);
       const pick = this.menu.update(dt, [this.hands.hands.left, this.hands.hands.right]);
       if (pick) this.onMenuPick(pick);
     }
+    if (this.autoLevel >= 0 && this.placed && this.ready && !this.rebuild && !this.pendingStart && this.mode === 'ready') {
+      if (this.camp.phase === 'off') this.openCampaignSelect();
+      else if (this.camp.phase === 'select') {
+        this.startLevel(this.autoLevel);
+        this.autoLevel = -1;
+      }
+    }
+    this.updateCampaignUi(dt);
     // 3-2-1-GO
-    if (this.pendingStart && !this.rebuild && this.ready) {
+    if (this.pendingStart && !this.rebuild && this.ready && (this.game !== 'campaign' || this.hero.ready)) {
       this.pendingStart = false;
+      if (this.game === 'campaign') this.campaignSetup();
       this.mode = 'playing';
       this.countdown = 3.4;
       this.sfx.combo(1);
@@ -1805,7 +1941,12 @@ export class GameSystem extends createSystem({
         this.sfx.zap();
         this.ticker.push('ATTACK HELICOPTER SCRAMBLED TO STOP THE MONSTER', true);
       }
-      if (this.time <= 0) {
+      if (this.game === 'campaign') {
+        if (this.time <= 0) {
+          this.time = 0;
+          this.campaignEnd(false, "TIME'S UP!");
+        } else if (this.hp <= 0) this.campaignEnd(false, 'KNOCKED OUT!');
+      } else if (this.time <= 0) {
         this.time = 0;
         this.endRound("TIME'S UP!");
       } else if (this.hp <= 0) {
@@ -1830,6 +1971,7 @@ export class GameSystem extends createSystem({
     if (this.ready) {
       this.updateCars(sim);
       this.updatePeople(sim);
+      this.updateHero(sim);
       this.updateTanks(sim);
       this.updateHeli(sim);
       this.updateFlying(sim);
@@ -1847,10 +1989,13 @@ export class GameSystem extends createSystem({
         const bt = this.settings.values.blitz;
         p = bt ? 0.15 + 0.4 * Math.min(1, this.elapsed / bt) : (this.elapsed % 120) / 120;
       } else if (this.game === 'heli') p = 0.5;
+      else if (this.game === 'campaign') p = LEVELS[this.camp.level].sky;
       else p = Math.min(1, this.cleared * 0.1);
-      this.day.setTarget(this.mode === 'playing' || this.mode === 'over' ? p : 0);
+      this.day.setTarget(this.mode === 'playing' || this.mode === 'over' || (this.camp.phase !== 'off' && this.camp.phase !== 'select') ? p : 0);
     }
     this.day.update(dt);
+    // keep the sun's shadow box on the part of the city you are looking at
+    this.sun.position.copy(this.day.dir).multiplyScalar(1.1 / this.city.scale.x).add(this.sunTarget.position);
     this.ruins.night = this.day.night;
     this.fx.setNight(this.day.night);
     this.ruins.update(sim);
@@ -1866,7 +2011,11 @@ export class GameSystem extends createSystem({
     this.tipMat.color.set(this.hurtT > 0 ? 0xff4040 : this.zoom ? 0x6fe08a : 0xffe066);
     this.monster.update([this.hands.hands.left, this.hands.hands.right], this.placed, this.city, HALF, this.hurtT > 0 ? 1 : this.zoom ? 2 : 0);
     this.updateNudges();
-    if (this.coach.mesh.visible) {
+    if (this.coach.mesh.visible && this.camp.phase !== 'off') {
+      this.qYaw.setFromAxisAngle(this.b.set(0, 1, 0), this.anchorYaw);
+      this.coach.mesh.position.set(-0.4, 0.16, 0.08).applyQuaternion(this.qYaw).add(this.anchor);
+      this.coach.mesh.lookAt(this.head);
+    } else if (this.coach.mesh.visible) {
       this.a.set(0, 0.2 / this.city.scale.x, 0.12);
       this.city.localToWorld(this.coach.mesh.position.copy(this.a));
       this.coach.mesh.lookAt(this.head);
@@ -1898,6 +2047,7 @@ export class GameSystem extends createSystem({
   }
 
   private handleHands(dt: number) {
+    if (this.camp.phase !== 'off') return this.campaignHands(dt);
     const s = this.city.scale.x;
     const L = this.hands.hands.left;
     const R = this.hands.hands.right;
@@ -2615,7 +2765,8 @@ export class GameSystem extends createSystem({
   }
 
   private updateShells(dt: number) {
-    const hitR = 0.022 / this.city.scale.x;
+    const hero = this.camp.phase === 'play';
+    const hitR = hero ? this.hero.radius * 1.8 : 0.022 / this.city.scale.x;
     for (const s of this.shells) {
       if (!s.active) continue;
       s.life -= dt;
@@ -2628,7 +2779,12 @@ export class GameSystem extends createSystem({
         }
       }
       if (hit) {
-        this.hp = Math.max(0, this.hp - this.diff.dmg);
+        if (hero) {
+          this.hero.hurt();
+          this.shakeT = 0.3;
+          this.shakeAmp = this.settings.values.shake ? 0.002 : 0;
+        }
+        this.hp = Math.max(0, this.hp - this.diff.dmg * (hero ? 0.75 : 1));
         this.hurtT = 0.35;
         this.fx.spark(s.mesh.position, 12, 0.35, 0xff4040);
         this.c.copy(s.mesh.position).setY(s.mesh.position.y + 0.02);
@@ -2644,6 +2800,7 @@ export class GameSystem extends createSystem({
 
   private updateHud() {
     const m = this.hud.mesh;
+    m.visible = this.camp.phase === 'off' || this.mode === 'searching' || this.mode === 'loading';
     if (this.mode === 'searching' || (this.mode === 'loading' && this.wasImmersive)) {
       this.player.head.getWorldQuaternion(m.quaternion);
       this.a.set(0, -0.05, -0.6).applyQuaternion(m.quaternion);
@@ -2660,7 +2817,7 @@ export class GameSystem extends createSystem({
     t.quaternion.copy(m.quaternion);
     this.a.set(0, -0.094, 0.001).applyQuaternion(m.quaternion);
     t.position.copy(m.position).add(this.a);
-    t.visible = this.ticker.enabled && this.mode !== 'loading' && this.mode !== 'searching';
+    t.visible = this.ticker.enabled && this.mode !== 'loading' && this.mode !== 'searching' && this.camp.phase === 'off';
     this.hud.draw({
       mode: this.mode,
       damage: this.damage,
@@ -2692,5 +2849,857 @@ export class GameSystem extends createSystem({
       xpLines: this.lastResult?.lines.join('   ') ?? '',
       hint: this.mode === 'ready' && this.wasImmersive ? 'Grab, crush, throw | 2-hand pinch = zoom' : undefined,
     });
+  }
+
+  /* =====================================================================
+   * CAMPAIGN (Moss-style): one hero walks the streets, the city is a diorama
+   * you can zoom into. Levels have one goal, a par time and a no-casualty star.
+   * ===================================================================== */
+
+  private openCampaignSelect() {
+    if (this.camp.phase === 'off') this.camp.prevMode = this.game === 'campaign' ? 'rampage' : this.game;
+    this.game = 'campaign';
+    this.camp.phase = 'select';
+    this.camp.goTo = null;
+    this.camp.goEntity = null;
+    this.zoomT = 1;
+    this.hero.root.visible = false;
+    for (const mk of this.markers) mk.visible = false;
+    this.cui.drawLevelCards(this.csave);
+    if (this.destroyed > 0 || this.cityGone || this.ruins.burning > 0 || this.theme !== LEVELS[0].theme) {
+      this.startRebuild(LEVELS[0].theme, false);
+    }
+    this.cityGone = false;
+    this.resetRound(false);
+    this.hero.preload(formForLevel(1));
+    this.sfx.combo(2);
+  }
+
+  private leaveCampaign() {
+    this.camp.phase = 'off';
+    this.game = this.camp.prevMode;
+    this.zoomT = this.zoomV = 1;
+    this.focus.set(0, 0, 0);
+    this.sunTarget.position.set(0, 0, 0);
+    this.city.scale.setScalar(1);
+    this.city.rotation.set(0, this.anchorYaw, 0);
+    this.city.position.copy(this.anchor);
+    for (const mk of this.markers) mk.visible = false;
+    for (const b of this.cui.buttons) b.plane.mesh.visible = false;
+    this.cui.board.mesh.visible = false;
+    this.hero.root.visible = false;
+    this.bubble.radius.value = 0;
+    this.resetRound(false);
+    this.refreshMenu();
+  }
+
+  private onCampaignPick(p: UiPick) {
+    this.sfx.unlock();
+    if (p.kind === 'zoom') {
+      this.zoomT = Math.min(6, Math.max(1, this.zoomT * (p.dir > 0 ? 1.5 : 1 / 1.5)));
+      this.sfx.pop();
+      return;
+    }
+    if (this.pendingStart || this.rebuild) return;
+    if (p.kind === 'level') {
+      if (this.camp.phase === 'select' && this.csave.unlocked(p.i)) this.startLevel(p.i);
+      return;
+    }
+    if (this.camp.phase !== 'won' && this.camp.phase !== 'lost' && p.kind !== 'back') return;
+    if (p.kind === 'retry') this.startLevel(this.camp.level);
+    else if (p.kind === 'next') {
+      const n = this.camp.level + 1;
+      if (n < LEVELS.length && this.csave.unlocked(n)) this.startLevel(n);
+      else this.openCampaignSelect();
+    } else if (p.kind === 'levels') this.openCampaignSelect();
+    else if (p.kind === 'back') this.leaveCampaign();
+  }
+
+  private startLevel(i: number) {
+    const L = LEVELS[i];
+    this.game = 'campaign';
+    this.camp.level = i;
+    this.camp.phase = 'intro';
+    this.camp.hurt = 0;
+    this.camp.stars = 0;
+    this.camp.shown = 0;
+    this.camp.revealT = 0;
+    this.camp.reason = '';
+    this.camp.progress = { marked: 0, buildings: 0, cars: 0, tanks: 0 };
+    this.camp.targets = [];
+    this.camp.hits.clear();
+    this.camp.goTo = null;
+    this.camp.goEntity = null;
+    this.camp.goActor = null;
+    this.camp.carry = null;
+    this.camp.tankT = 3;
+    const form = formForLevel(L.n);
+    this.camp.newForm = form.level === L.n && L.n > 1 ? form.name : '';
+    void this.hero.setForm(form);
+    if (i + 1 < LEVELS.length) this.hero.preload(formForLevel(LEVELS[i + 1].n));
+    // a fresh city grows for every attempt
+    this.startRebuild(L.theme, false);
+    this.resetRound(false);
+    this.hero.root.visible = false;
+    this.pendingStart = true;
+    this.zoomT = Math.max(this.zoomT, 1);
+    this.sfx.start();
+  }
+
+  /** the new city has grown: drop the hero in and pick the targets */
+  private campaignSetup() {
+    const L = LEVELS[this.camp.level];
+    const form = this.hero.form;
+    this.heroPos.set(0, 0, ROAD_LINES[3]);
+    this.hero.yaw = Math.PI;
+    this.hero.root.position.copy(this.heroPos);
+    this.hero.root.visible = true;
+    this.hero.carried = false;
+    this.focus.copy(this.heroPos);
+    this.fx.ring(this.heroPos, 0.06, 0xffffff, 0.6);
+    this.fx.puff(this.heroPos, 0.01, 12);
+    this.sfx.roar(0.6);
+    const need = L.goal.marked ?? 0;
+    if (need > 0) {
+      const cands: { e: Entity; d: number }[] = [];
+      for (const e of this.queries.buildings.entities) {
+        const o = e.object3D;
+        if (!o) continue;
+        const h = e.getValue(Building, 'height') ?? 0;
+        if (h > form.power || h < (L.markedMin ?? 0)) continue;
+        cands.push({ e, d: Math.hypot(o.position.x - this.heroPos.x, o.position.z - this.heroPos.z) + Math.random() * 0.05 });
+      }
+      cands.sort((a, b) => a.d - b.d);
+      // spread them out a bit: skip candidates right next to an already chosen one
+      for (const c of cands) {
+        if (this.camp.targets.length >= need) break;
+        const o = c.e.object3D!;
+        if (this.camp.targets.some((t) => t.object3D!.position.distanceTo(o.position) < 0.06)) continue;
+        this.camp.targets.push(c.e);
+      }
+      for (const c of cands) {
+        if (this.camp.targets.length >= need) break;
+        if (!this.camp.targets.includes(c.e)) this.camp.targets.push(c.e);
+      }
+    }
+    if (this.zoomT < 2.4) this.zoomT = 3;
+    this.bubble.patch(this.city);
+    for (const m of [sirenRedMat, sirenBlueMat, sirenOffMat]) this.bubble.patchMaterial(m);
+    this.hp = 100;
+  }
+
+  private campaignEnd(win: boolean, reason: string) {
+    if (this.camp.phase !== 'play') return;
+    const L = LEVELS[this.camp.level];
+    this.mode = 'over';
+    this.overT = 0;
+    this.camp.phase = win ? 'won' : 'lost';
+    this.camp.reason = reason;
+    this.camp.goTo = null;
+    this.camp.goEntity = null;
+    const used = L.limit - this.time;
+    let stars = 0;
+    if (win) stars = 1 + (used <= L.par ? 1 : 0) + (this.camp.hurt === 0 ? 1 : 0);
+    this.camp.stars = stars;
+    this.camp.shown = 0;
+    this.camp.revealT = -0.6;
+    const wasLocked = this.camp.level + 1 < LEVELS.length && !this.csave.unlocked(this.camp.level + 1);
+    if (win) this.csave.record(this.camp.level, stars, used);
+    this.camp.newForm = '';
+    if (win && wasLocked) {
+      const nf = formForLevel(LEVELS[this.camp.level + 1].n);
+      if (nf.level === LEVELS[this.camp.level + 1].n) this.camp.newForm = nf.name;
+    }
+    for (const mk of this.markers) mk.visible = false;
+    for (const e of this.queries.tanks.entities) if (e.getValue(Tank, 'alive')) this.hideTank(e);
+    for (const sh of this.shells) {
+      sh.active = false;
+      sh.mesh.visible = false;
+    }
+    if (win) {
+      this.hero.celebrate();
+      this.sfx.roar(1);
+      this.fx.ring(this.heroPos, 0.12, 0xffcf3a, 0.8);
+    }
+    this.sfx.end(win);
+    this.sfx.music('calm', 3);
+    this.sfx.musicLevel(0.2);
+    this.cui.drawLevelCards(this.csave);
+    this.refreshMenu();
+  }
+
+  /** smash() hook: count it, and hurt anyone standing where it falls */
+  private campaignBuilding(e: Entity, o: Object3D, w: number, d: number) {
+    if (this.camp.phase !== 'play') return;
+    const ti = this.camp.targets.indexOf(e);
+    if (ti >= 0) this.camp.progress.marked++;
+    else this.camp.progress.buildings++;
+    const r = Math.max(w, d) * 0.62;
+    for (const p of this.people) {
+      if (p.state === 'down') continue;
+      if (Math.hypot(p.obj.position.x - o.position.x, p.obj.position.z - o.position.z) < r) this.hurtPerson(p, o.position);
+    }
+  }
+
+  private hurtPerson(p: Person, from: Vector3) {
+    if (p.state === 'down') return;
+    p.state = 'down';
+    p.stateT = 3 + Math.random();
+    const dx = p.obj.position.x - from.x;
+    const dz = p.obj.position.z - from.z;
+    const d = Math.max(0.004, Math.hypot(dx, dz));
+    p.vx = (dx / d) * 0.05;
+    p.vz = (dz / d) * 0.05;
+    p.yaw = Math.atan2(-dx, -dz);
+    this.playAnim(p, 'die', 0.08);
+    if (this.camp.phase === 'play') {
+      this.camp.hurt++;
+      this.c.copy(p.obj.position).setY(0.04);
+      this.fx.popup(this.c, 'OUCH! -★', '#ff6a6a');
+      this.sfx.scream(1);
+      this.sfx.ouch();
+    }
+  }
+
+  /** Zoom + follow: the city slides under the anchor so the hero stays in front of you. */
+  private campaignCamera(dt: number) {
+    if (this.camp.phase === 'off') {
+      this.bubble.radius.value = 0;
+      this.bubble.rim.visible = false;
+      this.fx.textScale = 1;
+      return;
+    }
+    // controller: right stick up/down zooms, a held grip moves the whole diorama
+    const rp = this.input.gamepads.right;
+    if (rp) {
+      const ax = rp.getAxesValues(InputComponent.Thumbstick);
+      if (ax && Math.abs(ax.y) > 0.5) this.zoomT = Math.min(6, Math.max(1, this.zoomT * (1 - ax.y * dt * 1.6)));
+      this.updatePlacing(rp.getButtonPressed(InputComponent.Squeeze));
+    }
+    const kb = this.input.keyboard;
+    if (kb.getKeyPressed('Equal') || kb.getKeyPressed('NumpadAdd')) this.zoomT = Math.min(6, this.zoomT * (1 + dt * 1.6));
+    if (kb.getKeyPressed('Minus') || kb.getKeyPressed('NumpadSubtract')) this.zoomT = Math.max(1, this.zoomT * (1 - dt * 1.6));
+
+    const zv = this.zoomV + (this.zoomT - this.zoomV) * Math.min(1, dt * 4);
+    this.zoomV = zv;
+    const follow = this.camp.phase === 'select' ? 0 : Math.min(1, Math.max(0, (zv - 1) / 1.2));
+    this.a.copy(this.heroPos).setY(0).multiplyScalar(follow);
+    // keep the diorama cut inside the city
+    const lim = Math.max(0, HALF - 0.32 / zv);
+    this.a.x = Math.max(-lim, Math.min(lim, this.a.x));
+    this.a.z = Math.max(-lim, Math.min(lim, this.a.z));
+    this.focus.lerp(this.a, Math.min(1, dt * 5));
+    this.qYaw.setFromAxisAngle(this.b.set(0, 1, 0), this.anchorYaw);
+    this.city.rotation.set(0, this.anchorYaw, 0);
+    this.city.scale.setScalar(zv);
+    this.a.copy(this.focus).multiplyScalar(zv).applyQuaternion(this.qYaw);
+    this.city.position.copy(this.anchor).sub(this.a);
+    this.sunTarget.position.copy(this.focus);
+    // diorama cut once the city is bigger than the "bubble"
+    const R = 0.34;
+    this.bubble.radius.value = HALF * zv > R + 0.02 ? R : 0;
+    this.bubble.center.copy(this.anchor);
+    this.bubble.update(dt, this.anchor.y, 0.035);
+    this.fx.textScale = 1 / Math.pow(zv, 0.75);
+  }
+
+  /** controller grip: point at any surface (table, shelf, aquarium lid...) and let go to move the city there */
+  private updatePlacing(grip: boolean) {
+    if (grip && !this.placing) {
+      this.placing = true;
+      this.reticleEntity.addComponent(EnvironmentRaycastTarget, { space: RaycastSpace.Right, maxDistance: 4 });
+    } else if (!grip && this.placing) {
+      this.placing = false;
+      if (this.reticle.visible) {
+        this.reticle.getWorldPosition(this.a);
+        this.player.head.getWorldPosition(this.head);
+        this.anchor.copy(this.a);
+        this.anchorYaw = Math.atan2(this.head.x - this.a.x, this.head.z - this.a.z);
+        this.placed = true;
+        this.fx.ring(this.c.copy(this.focus), 0.3, 0x6fe08a, 0.6);
+        this.sfx.start();
+      }
+      this.reticleEntity.removeComponent(EnvironmentRaycastTarget);
+      this.reticle.visible = false;
+    }
+  }
+
+  /** Hands in the campaign: pinch the hero to carry him, pinch the ground to send him,
+   *  pinch a building to make him smash it, two-hand pinch to zoom, pinch-hold to move the city. */
+  private campaignHands(dt: number) {
+    void dt;
+    const L = this.hands.hands.left;
+    const R = this.hands.hands.right;
+    // the hero is the only "target" for tanks, shells and frightened people
+    this.localTips[0].copy(this.heroPos).setY(this.hero.form.height * 0.6);
+    this.tipSide[0] = 'right';
+    this.tipCount = this.camp.phase === 'play' || this.camp.phase === 'intro' ? 1 : 0;
+
+    if (L.tracked && R.tracked && L.pinch && R.pinch && !this.camp.carry) {
+      const d = L.pinchPoint.distanceTo(R.pinchPoint);
+      if (!this.pinchZoom) this.pinchZoom = { d0: Math.max(0.04, d), z0: this.zoomT };
+      this.zoomT = Math.min(6, Math.max(1, (this.pinchZoom.z0 * d) / this.pinchZoom.d0));
+      L.pinchHeld = R.pinchHeld = -10;
+      return;
+    }
+    if (this.pinchZoom && !(L.pinch && R.pinch)) this.pinchZoom = null;
+
+    for (const side of SIDES) {
+      const h = this.hands.hands[side];
+      if (!h.tracked) {
+        if (this.camp.carry === side) this.dropHero();
+        continue;
+      }
+      // move the whole diorama: pinch & hold while no level is running
+      const idle = this.camp.phase === 'select' || this.camp.phase === 'won' || this.camp.phase === 'lost';
+      if (idle && h.pinchHeld > 1.1) {
+        this.player.head.getWorldPosition(this.head);
+        this.anchor.copy(h.pinchPoint);
+        this.anchor.y -= 0.012;
+        this.anchorYaw = Math.atan2(this.head.x - this.anchor.x, this.head.z - this.anchor.z);
+        h.pinchHeld = -10;
+        this.fx.ring(this.c.copy(this.focus), 0.3, 0x6fe08a, 0.6);
+        this.sfx.start();
+        continue;
+      }
+      if (this.camp.phase !== 'play') continue;
+      this.toLocal(h.pinchPoint, this.a);
+      if (this.camp.carry === side) {
+        if (h.pinch) {
+          this.heroPos.set(this.a.x, 0, this.a.z);
+          this.hero.root.position.set(this.a.x, Math.max(0, this.a.y - this.hero.form.height * 0.95), this.a.z);
+        } else this.dropHero();
+        continue;
+      }
+      if (!h.pinchStart) continue;
+      const hh = this.hero.form.height;
+      const dHero = Math.hypot(this.a.x - this.heroPos.x, this.a.z - this.heroPos.z);
+      if (dHero < Math.max(hh * 0.6, 0.012) && this.a.y < hh * 1.4 && this.a.y > -0.01) {
+        this.camp.carry = side;
+        this.hero.carried = true;
+        this.camp.goTo = null;
+        this.camp.goEntity = null;
+        this.sfx.grab();
+        continue;
+      }
+      if (this.a.y > 0.3 || this.a.y < -0.02) continue;
+      // pinched a building? walk over and smash it
+      let pick: Entity | null = null;
+      for (const e of this.queries.buildings.entities) {
+        if (!e.getValue(Building, 'alive')) continue;
+        const o = e.object3D;
+        if (!o) continue;
+        const hw = (e.getValue(Building, 'width') ?? 0.03) / 2 + 0.004;
+        if (Math.abs(this.a.x - o.position.x) < hw && Math.abs(this.a.z - o.position.z) < hw && this.a.y < (e.getValue(Building, 'height') ?? 0.05) + 0.01) {
+          pick = e;
+          break;
+        }
+      }
+      this.camp.path.length = 0;
+      this.camp.goActor = null;
+      let actor: Object3D | null = null;
+      let ad = 0.02;
+      for (const car of this.cars) {
+        if (car.state !== 'drive') continue;
+        const d = Math.hypot(car.obj.position.x - this.a.x, car.obj.position.z - this.a.z);
+        if (d < ad && this.a.y < 0.04) {
+          ad = d;
+          actor = car.obj;
+        }
+      }
+      for (const e of this.queries.tanks.entities) {
+        const o = e.object3D;
+        if (!o || !e.getValue(Tank, 'alive')) continue;
+        const d = Math.hypot(o.position.x - this.a.x, o.position.z - this.a.z);
+        if (d < ad + 0.01 && this.a.y < 0.05) {
+          ad = d;
+          actor = o;
+        }
+      }
+      if (actor) {
+        this.camp.goActor = actor;
+        this.camp.goEntity = null;
+        this.camp.goTo = actor.position.clone().setY(0);
+        this.fx.ring(this.c.copy(this.camp.goTo).setY(0.001), 0.02, 0xff8a5a, 0.45);
+        this.sfx.pop();
+        continue;
+      }
+      if (pick) {
+        this.camp.goEntity = pick;
+        this.camp.goTo = pick.object3D!.position.clone().setY(0);
+        this.wobble(pick, pick.object3D!, 0.03, 0);
+      } else if (this.a.y < 0.025) {
+        this.camp.goEntity = null;
+        this.camp.goTo = new Vector3(this.a.x, 0, this.a.z);
+      } else continue;
+      this.fx.ring(this.c.copy(this.camp.goTo).setY(0.001), 0.02, 0x9ef0ff, 0.45);
+      this.sfx.pop();
+    }
+  }
+
+  private dropHero() {
+    this.camp.carry = null;
+    this.hero.carried = false;
+    this.hero.root.position.y = 0;
+    this.fx.puff(this.heroPos, 0.004, 6);
+    this.sfx.pop();
+    this.hero.jumpT = 0.25;
+  }
+
+  private grid = new Uint8Array(0);
+  private prev = new Int32Array(0);
+  /** Breadth-first search over a fine grid of the city: walk around the buildings, not through them. */
+  private planPath(goal: Vector3, ignore: Entity | null) {
+    const N = 66;
+    const cell = (HALF * 2) / N;
+    if (this.grid.length !== N * N) {
+      this.grid = new Uint8Array(N * N);
+      this.prev = new Int32Array(N * N);
+    }
+    const g = this.grid;
+    g.fill(0);
+    const r = this.hero.radius * 0.95;
+    const idx = (v: number) => Math.max(0, Math.min(N - 1, Math.floor((v + HALF) / cell)));
+    for (const e of this.queries.buildings.entities) {
+      if (e === ignore || !e.getValue(Building, 'alive')) continue;
+      const o = e.object3D;
+      if (!o) continue;
+      const half = ((e.getValue(Building, 'width') ?? 0.03) / 2) * 0.9 + r;
+      for (let i = idx(o.position.x - half); i <= idx(o.position.x + half); i++)
+        for (let j = idx(o.position.z - half); j <= idx(o.position.z + half); j++) g[j * N + i] = 1;
+    }
+    const si = idx(this.heroPos.x);
+    const sj = idx(this.heroPos.z);
+    const reach = ignore ? (ignore.getValue(Building, 'width') ?? 0.03) / 2 + this.hero.radius + this.hero.form.height * 0.18 : cell * 1.5;
+    const prev = this.prev;
+    prev.fill(-1);
+    const queue: number[] = [sj * N + si];
+    prev[sj * N + si] = sj * N + si;
+    g[sj * N + si] = 0;
+    let found = -1;
+    for (let q = 0; q < queue.length; q++) {
+      const c = queue[q];
+      const ci = c % N;
+      const cj = (c / N) | 0;
+      const cx = -HALF + (ci + 0.5) * cell;
+      const cz = -HALF + (cj + 0.5) * cell;
+      if (Math.hypot(cx - goal.x, cz - goal.z) <= reach) {
+        found = c;
+        break;
+      }
+      for (let k = 0; k < 8; k++) {
+        const di = k === 0 ? 1 : k === 1 ? -1 : k === 2 || k === 3 ? 0 : k < 6 ? 1 : -1;
+        const dj = k === 2 ? 1 : k === 3 ? -1 : k < 2 ? 0 : k % 2 === 0 ? 1 : -1;
+        const ni = ci + di;
+        const nj = cj + dj;
+        if (ni < 0 || nj < 0 || ni >= N || nj >= N) continue;
+        const n = nj * N + ni;
+        if (g[n] || prev[n] >= 0) continue;
+        // no corner cutting
+        if (di && dj && (g[cj * N + ni] || g[nj * N + ci])) continue;
+        prev[n] = c;
+        queue.push(n);
+      }
+    }
+    this.camp.path.length = 0;
+    if (found < 0) return false;
+    const cells: number[] = [];
+    for (let c = found; c !== prev[c]; c = prev[c]) cells.push(c);
+    cells.reverse();
+    for (let k = 0; k < cells.length; k++) {
+      if (k % 3 !== 2 && k !== cells.length - 1) continue;
+      const c = cells[k];
+      this.camp.path.push(new Vector3(-HALF + ((c % N) + 0.5) * cell, 0, -HALF + (((c / N) | 0) + 0.5) * cell));
+    }
+    if (!ignore) this.camp.path.push(goal.clone());
+    return true;
+  }
+
+  /** move with collisions; returns false if blocked */
+  private moveHero(dx: number, dz: number) {
+    const form = this.hero.form;
+    const r = this.hero.radius;
+    let nx = this.heroPos.x + dx;
+    let nz = this.heroPos.z + dz;
+    for (const e of this.queries.buildings.entities) {
+      if (!e.getValue(Building, 'alive')) continue;
+      const o = e.object3D;
+      if (!o) continue;
+      const half = ((e.getValue(Building, 'width') ?? 0.03) / 2) * 0.9;
+      const cx = Math.max(o.position.x - half, Math.min(nx, o.position.x + half));
+      const cz = Math.max(o.position.z - half, Math.min(nz, o.position.z + half));
+      const ox = nx - cx;
+      const oz = nz - cz;
+      const d2 = ox * ox + oz * oz;
+      if (d2 >= r * r) continue;
+      const h = e.getValue(Building, 'height') ?? 0.05;
+      // big forms just walk through small stuff
+      if (form.stomp > 0 && h < form.power * form.stomp && this.canScore()) {
+        this.smash(e, this.a.copy(this.heroPos).setY(0.01), 1.4, 1, 'STOMP ');
+        continue;
+      }
+      const d = Math.sqrt(d2);
+      if (d < 1e-5) {
+        // centre inside the footprint: push straight back out along the move
+        nx = this.heroPos.x;
+        nz = this.heroPos.z;
+        continue;
+      }
+      nx = cx + (ox / d) * r;
+      nz = cz + (oz / d) * r;
+    }
+    const lim = HALF - r;
+    nx = Math.max(-lim, Math.min(lim, nx));
+    nz = Math.max(-lim, Math.min(lim, nz));
+    const moved = Math.hypot(nx - this.heroPos.x, nz - this.heroPos.z);
+    this.heroPos.x = nx;
+    this.heroPos.z = nz;
+    return moved > Math.hypot(dx, dz) * 0.3;
+  }
+
+  private updateHero(dt: number) {
+    const ph = this.camp.phase;
+    if (ph === 'off' || ph === 'select' || !this.hero.root.visible) {
+      if (this.camp.phase !== 'off' && this.camp.phase !== 'select') this.hero.update(dt);
+      return;
+    }
+    const form = this.hero.form;
+    const L = LEVELS[this.camp.level];
+    let mx = 0;
+    let mz = 0;
+    let run = false;
+    let punch = false;
+    let kick = false;
+    let jump = false;
+    if (ph === 'play' && this.canScore() && !this.hero.carried) {
+      const lp = this.input.gamepads.left;
+      const rp = this.input.gamepads.right;
+      const kb = this.input.keyboard;
+      let sx = 0;
+      let sy = 0;
+      if (lp) {
+        const ax = lp.getAxesValues(InputComponent.Thumbstick);
+        if (ax) {
+          sx = ax.x;
+          sy = ax.y;
+        }
+        if (lp.getButtonDown(InputComponent.X_Button) || lp.getSelectStart()) kick = true;
+        if (lp.getButtonDown(InputComponent.Y_Button)) jump = true;
+      }
+      if (rp) {
+        if (rp.getButtonDown(InputComponent.A_Button) || rp.getSelectStart()) punch = true;
+        if (rp.getButtonDown(InputComponent.B_Button)) jump = true;
+      }
+      if (kb.getKeyPressed('KeyW') || kb.getKeyPressed('ArrowUp')) sy -= 1;
+      if (kb.getKeyPressed('KeyS') || kb.getKeyPressed('ArrowDown')) sy += 1;
+      if (kb.getKeyPressed('KeyA') || kb.getKeyPressed('ArrowLeft')) sx -= 1;
+      if (kb.getKeyPressed('KeyD') || kb.getKeyPressed('ArrowRight')) sx += 1;
+      if (kb.getKeyPressed('ShiftLeft') || kb.getKeyPressed('ShiftRight')) run = true;
+      if (kb.getKeyDown('KeyJ') || kb.getKeyDown('KeyF')) punch = true;
+      if (kb.getKeyDown('KeyK')) kick = true;
+      if (kb.getKeyDown('Space')) jump = true;
+      const ti = this.testInput;
+      if (ti) {
+        sx += ti.x;
+        sy += ti.y;
+        punch ||= !!ti.punch;
+        run ||= !!ti.run;
+        ti.punch = false;
+      }
+      let mag = Math.min(1, Math.hypot(sx, sy));
+      if (mag > 0.15) {
+        // stick directions are relative to where you look
+        this.player.head.getWorldQuaternion(this.q);
+        if (!this.wasImmersive) this.world.camera.getWorldQuaternion(this.q);
+        this.b.set(0, 0, -1).applyQuaternion(this.q);
+        this.city.getWorldQuaternion(this.qi).invert();
+        this.b.applyQuaternion(this.qi);
+        this.b.y = 0;
+        if (this.b.lengthSq() < 1e-6) this.b.set(0, 0, -1);
+        this.b.normalize();
+        const fx = this.b.x;
+        const fz = this.b.z;
+        mx = fx * -sy + -fz * sx;
+        mz = fz * -sy + fx * sx;
+        const n = Math.hypot(mx, mz) || 1;
+        mx /= n;
+        mz /= n;
+        if (mag > 0.92) run = true;
+        this.camp.goTo = null;
+        this.camp.goEntity = null;
+        this.camp.goActor = null;
+        this.camp.path.length = 0;
+      } else mag = 0;
+      // hand command: follow the planned street path, then punch the pinched building
+      const goal = this.camp.goTo;
+      const actor = this.camp.goActor;
+      if (mag === 0 && actor && goal) {
+        if (!actor.visible || actor.scale.y < 0.5) {
+          this.camp.goActor = null;
+          this.camp.goTo = null;
+        } else {
+          goal.copy(actor.position).setY(0);
+          const gx = goal.x - this.heroPos.x;
+          const gz = goal.z - this.heroPos.z;
+          const gd = Math.hypot(gx, gz);
+          if (gd <= this.hero.radius + form.height * 0.3) {
+            this.hero.yaw = Math.atan2(gx, gz);
+            punch = true;
+          } else {
+            mx = gx / gd;
+            mz = gz / gd;
+            mag = 1;
+            run = true;
+          }
+        }
+      } else if (mag === 0 && goal) {
+        const ge = this.camp.goEntity;
+        if (ge && !ge.getValue(Building, 'alive')) {
+          this.camp.goTo = null;
+          this.camp.goEntity = null;
+          this.camp.path.length = 0;
+        } else {
+          const reach = ge ? (ge.getValue(Building, 'width') ?? 0.03) / 2 + this.hero.radius + form.height * 0.22 : 0.005;
+          const gx = goal.x - this.heroPos.x;
+          const gz = goal.z - this.heroPos.z;
+          const gd = Math.hypot(gx, gz);
+          if (gd <= reach) {
+            this.camp.path.length = 0;
+            if (ge) {
+              this.hero.yaw = Math.atan2(gx, gz);
+              punch = true;
+            } else this.camp.goTo = null;
+          } else {
+            if (this.camp.path.length === 0 && !this.planPath(goal, ge)) {
+              this.camp.goTo = null;
+              this.camp.goEntity = null;
+            }
+            const wp = this.camp.path[0];
+            if (wp) {
+              const wx = wp.x - this.heroPos.x;
+              const wz = wp.z - this.heroPos.z;
+              const wd = Math.hypot(wx, wz);
+              if (wd < 0.006 && this.camp.path.length > 1) this.camp.path.shift();
+              mx = wx / Math.max(1e-5, wd);
+              mz = wz / Math.max(1e-5, wd);
+              mag = 1;
+              run = gd > 0.08;
+            }
+          }
+        }
+      }
+      if (mag > 0) {
+        const sp = form.speed * (run ? 1.9 : 1) * Math.max(0.35, mag);
+        const ok = this.moveHero(mx * sp * dt, mz * sp * dt);
+        const want = Math.atan2(mx, mz);
+        this.hero.yaw += wrapAngle(want - this.hero.yaw) * Math.min(1, dt * 12);
+        this.hero.moving = run ? 1 : 0.5;
+        if (!ok && this.camp.goTo) {
+          this.camp.blockT += dt;
+          if (this.camp.blockT > 0.35) {
+            this.camp.blockT = 0;
+            this.camp.path.length = 0;
+          }
+        } else this.camp.blockT = 0;
+        this.camp.stepT -= dt;
+        if (this.camp.stepT <= 0 && this.hero.jumpT <= 0) {
+          this.camp.stepT = run ? 0.22 : 0.34;
+          this.fx.puff(this.c.copy(this.heroPos).setY(0.001), 0.001, run ? 2 : 1);
+        }
+      } else this.hero.moving = 0;
+      if (punch) this.hero.attack('punch');
+      else if (kick) this.hero.attack('kick');
+      if (jump && this.hero.jump()) this.sfx.pop();
+    } else this.hero.moving = 0;
+    if (!this.hero.carried) this.hero.root.position.set(this.heroPos.x, 0, this.heroPos.z);
+    if (this.hero.attackLands()) this.heroStrike();
+    this.camp.tooBigT = Math.max(0, this.camp.tooBigT - dt);
+    this.hero.update(dt);
+
+    // glowing goal markers
+    let mi = 0;
+    if (ph === 'play' || ph === 'intro') {
+      for (const e of this.camp.targets) {
+        if (mi >= this.markers.length) break;
+        const o = e.object3D;
+        if (!o || !e.getValue(Building, 'alive')) continue;
+        const mk = this.markers[mi++];
+        const ms = 0.55 / Math.sqrt(this.zoomV);
+        mk.visible = true;
+        mk.scale.setScalar(ms);
+        mk.position.set(o.position.x, o.position.y + (e.getValue(Building, 'height') ?? 0.05) + 0.06 * ms + Math.sin(this.now * 5) * 0.003, o.position.z);
+        mk.rotation.y += dt * 3;
+      }
+    }
+    for (; mi < this.markers.length; mi++) this.markers[mi].visible = false;
+
+    if (ph !== 'play' || !this.canScore()) return;
+    // the army: keep a couple of tanks on the ring road until enough are destroyed
+    if (L.goal.tanks && this.camp.progress.tanks < L.goal.tanks) {
+      let alive = 0;
+      for (const e of this.queries.tanks.entities) if (e.getValue(Tank, 'alive')) alive++;
+      this.camp.tankT -= dt;
+      if (alive < 2 && this.camp.tankT <= 0) {
+        this.spawnTank();
+        this.camp.tankT = 4;
+        if (this.once('camp-tanks')) this.ticker.push('ARMY TANKS ROLL INTO TOKYO', true);
+      }
+    }
+    if (this.cui.allDone(L.goal, this.camp.progress)) this.campaignEnd(true, 'CLEAR');
+  }
+
+  /** the punch/kick connects: buildings, cars, tanks - and careless hits on people */
+  private heroStrike() {
+    const form = this.hero.form;
+    const reach = this.hero.radius + form.height * 0.32;
+    const fx = Math.sin(this.hero.yaw);
+    const fz = Math.cos(this.hero.yaw);
+    const ix = this.heroPos.x + fx * reach;
+    const iz = this.heroPos.z + fz * reach;
+    const hitR = form.height * 0.28;
+    const imp = this.c.set(ix, form.height * 0.45, iz);
+    let best: Entity | null = null;
+    let bestD = 1e9;
+    for (const e of this.queries.buildings.entities) {
+      if (!e.getValue(Building, 'alive')) continue;
+      const o = e.object3D;
+      if (!o) continue;
+      const half = (e.getValue(Building, 'width') ?? 0.03) / 2;
+      const cx = Math.max(o.position.x - half, Math.min(ix, o.position.x + half));
+      const cz = Math.max(o.position.z - half, Math.min(iz, o.position.z + half));
+      const d = Math.hypot(ix - cx, iz - cz);
+      if (d < hitR && d < bestD) {
+        bestD = d;
+        best = e;
+      }
+    }
+    let hitSomething = false;
+    if (best) {
+      hitSomething = true;
+      const o = best.object3D!;
+      const h = best.getValue(Building, 'height') ?? 0.05;
+      if (h > form.power) {
+        this.wobble(best, o, 0.025, 0);
+        this.fx.spark(imp, 6, 0.2, 0xffffff);
+        this.sfx.metal();
+        if (this.camp.tooBigT <= 0) {
+          this.camp.tooBigT = 1.2;
+          this.fx.popup(this.a.copy(imp).setY(h * 0.6 + 0.02), 'TOO BIG! GROW STRONGER', '#ff8a5a');
+        }
+      } else {
+        const need = Math.max(1, Math.ceil((3 * h) / form.power));
+        const left = (this.camp.hits.get(best.index) ?? need) - 1;
+        this.camp.hits.set(best.index, left);
+        this.sfx.punch();
+        this.hitStop(0.05);
+        this.shakeT = 0.18;
+        this.shakeAmp = this.settings.values.shake ? 0.0012 : 0;
+        if (left <= 0) {
+          this.smash(best, imp, 2.2, 1, this.hero.attackKind === 'kick' ? 'KICK ' : 'PUNCH ');
+          this.hitStop(0.09);
+        } else {
+          this.wobble(best, o, 0.06, 0);
+          this.fx.puff(imp, 0.01, 5);
+          this.fx.spark(imp, 8, 0.25);
+          this.fx.popup(this.a.copy(imp).setY(h + 0.015), `${left} MORE`, '#ffffff');
+        }
+      }
+    }
+    for (const car of this.cars) {
+      if (car.state === 'drive' && Math.hypot(car.obj.position.x - ix, car.obj.position.z - iz) < hitR + 0.008) {
+        this.wreckCar(car, imp);
+        hitSomething = true;
+      }
+    }
+    for (const e of this.queries.tanks.entities) {
+      if (!e.getValue(Tank, 'alive')) continue;
+      const o = e.object3D;
+      if (o && Math.hypot(o.position.x - ix, o.position.z - iz) < hitR + 0.014) {
+        this.killTank(e, 60, 'TANK ');
+        hitSomething = true;
+      }
+    }
+    for (const p of this.people) {
+      if (p.state !== 'down' && Math.hypot(p.obj.position.x - ix, p.obj.position.z - iz) < hitR * 0.8) this.hurtPerson(p, this.heroPos);
+    }
+    if (!hitSomething) this.fx.puff(imp.setY(0.002), 0.002, 2);
+  }
+
+  /** board, level cards, result + zoom buttons: placement, drawing and pokes */
+  private updateCampaignUi(dt: number) {
+    const ph = this.camp.phase;
+    const on = ph !== 'off' && this.placed;
+    const showCards = on && ph === 'select' && !this.rebuild;
+    const showBoard = on && ph !== 'select';
+    const showResult = on && (ph === 'won' || ph === 'lost') && this.camp.revealT > 1.2;
+    for (const b of this.cui.levelCards) b.plane.mesh.visible = showCards;
+    this.cui.back.plane.mesh.visible = showCards;
+    this.cui.board.mesh.visible = showBoard;
+    for (const b of this.cui.resultButtons) b.plane.mesh.visible = showResult;
+    for (const b of this.cui.zoomButtons) b.plane.mesh.visible = on && ph !== 'select';
+    if (!on) return;
+    this.qYaw.setFromAxisAngle(this.b.set(0, 1, 0), this.anchorYaw);
+    const place = (m: Mesh, x: number, y: number, z: number, bob = 0) => {
+      m.position.set(x, y, z).applyQuaternion(this.qYaw).add(this.anchor);
+      m.position.y += bob;
+      m.lookAt(this.head);
+    };
+    const t = this.cui.time;
+    if (showCards) {
+      const all = [...this.cui.levelCards, this.cui.back];
+      const n = all.length;
+      all.forEach((b, i) => place(b.plane.mesh, (i - (n - 1) / 2) * 0.094, 0.1, 0.34, Math.sin(t * 2 + i) * 0.003));
+    }
+    if (showBoard) place(this.cui.board.mesh, 0, 0.3, -0.36);
+    if (showResult) {
+      const okNext = ph === 'won' && this.camp.level + 1 < LEVELS.length;
+      this.cui.resultButtons[1].enabled = okNext;
+      this.cui.resultButtons[1].plane.mesh.visible = okNext;
+      const vis = this.cui.resultButtons.filter((b) => b.plane.mesh.visible);
+      vis.forEach((b, i) => place(b.plane.mesh, (i - (vis.length - 1) / 2) * 0.115, 0.075, 0.33));
+    }
+    this.cui.zoomButtons.forEach((b, i) => place(b.plane.mesh, 0.37, 0.09 - i * 0.045, 0.12));
+    // star reveal on the result card
+    if (ph === 'won' || ph === 'lost') {
+      this.camp.revealT += dt;
+      const want = Math.max(0, Math.min(this.camp.stars, Math.floor(this.camp.revealT / 0.5)));
+      if (want > this.camp.shown) {
+        this.camp.shown = want;
+        this.sfx.combo(2 + want * 2);
+        this.cui.board.mesh.getWorldPosition(this.a);
+        this.toLocal(this.a, this.b);
+        this.fx.spark(this.b, 24, 0.4, 0xffcf3a);
+      }
+    }
+    if (showBoard) {
+      const st: BoardState = {
+        level: LEVELS[this.camp.level],
+        phase: ph === 'won' || ph === 'lost' ? ph : ph === 'play' ? 'play' : 'intro',
+        time: this.time,
+        progress: this.camp.progress,
+        hurt: this.camp.hurt,
+        hp: this.hp,
+        stars: this.camp.stars,
+        shown: this.camp.shown,
+        reason: this.camp.reason,
+        newForm: this.camp.newForm,
+        countdown: this.countdown,
+        best: this.csave.stars[this.camp.level],
+      };
+      this.cui.drawBoard(st);
+    }
+    const pick = this.cui.update(dt, [this.hands.hands.left, this.hands.hands.right]);
+    if (pick) this.onCampaignPick(pick);
+    // desktop shortcuts
+    const kb = this.input.keyboard;
+    if (ph === 'won' || ph === 'lost') {
+      if (kb.getKeyDown('KeyR')) this.onCampaignPick({ kind: 'retry' });
+      if (kb.getKeyDown('KeyN')) this.onCampaignPick({ kind: 'next' });
+      if (kb.getKeyDown('KeyL')) this.onCampaignPick({ kind: 'levels' });
+    }
+    if (ph === 'select') {
+      for (let i = 0; i < LEVELS.length; i++) if (kb.getKeyDown(`Digit${i + 1}`)) this.onCampaignPick({ kind: 'level', i });
+      if (kb.getKeyDown('Escape')) this.onCampaignPick({ kind: 'back' });
+    }
   }
 }

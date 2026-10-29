@@ -1,5 +1,6 @@
 import { AssetType, defineAssets } from '@iwsdk/core';
 import { KIT, kitAssetId } from './kit-manifest.js';
+import { HERO_ASSETS } from './hero-manifest.js';
 import { CALM_MUSIC_ID, MUSIC_ID, SFX_FILES, sfxAssetId } from './sfx-manifest.js';
 
 const publicAssetUrl = (filePath: string): string =>
@@ -11,6 +12,9 @@ for (const [key, m] of Object.entries(KIT)) {
 }
 for (const s of SFX_FILES) {
   entries[sfxAssetId(s)] = { url: publicAssetUrl(`audio/sfx/${s}.ogg`), type: AssetType.Audio, name: s, priority: 'lazy' };
+}
+for (const [id, path] of Object.entries(HERO_ASSETS)) {
+  entries[id] = { url: publicAssetUrl(path), type: AssetType.GLTF, name: id, priority: 'lazy' };
 }
 entries[MUSIC_ID] = { url: publicAssetUrl('audio/music-fight-loop.ogg'), type: AssetType.Audio, name: 'Fight loop', priority: 'lazy' };
 entries[CALM_MUSIC_ID] = { url: publicAssetUrl('audio/music-calm-loop.ogg'), type: AssetType.Audio, name: 'Calm loop', priority: 'lazy' };

@@ -106,6 +106,12 @@ export const THEMES: { name: string; layout: (bi: number, bj: number) => Distric
     layout: (bi, bj) => (bi === 3 && bj === 0 ? 'park' : bj <= 1 ? 'industrial' : bi === 1 || bi === 2 ? 'commercial' : 'suburban'),
   },
   {
+    // campaign city: a downtown core of towers (too big for a human!) ringed by shops and houses
+    name: 'TOKYO',
+    layout: (bi, bj) =>
+      (bi === 1 || bi === 2) && (bj === 1 || bj === 2) ? 'downtown' : (bi + bj) % 2 === 0 ? 'commercial' : 'suburban',
+  },
+  {
     name: 'HARBOUR HEIGHTS',
     layout: (bi, bj) => (bi === 3 && bj === 0 ? 'park' : bi === 0 ? 'industrial' : bi === 1 ? 'downtown' : bj === 3 ? 'suburban' : 'commercial'),
   },

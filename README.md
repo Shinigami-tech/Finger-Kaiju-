@@ -4,7 +4,28 @@
 
 A mixed reality, hands-only game for Meta Quest, built for the Meta VR Start Developer Competition 2026 (Gaming track).
 
-## How to play
+## Campaign (new): be the giant, win 3 stars
+
+A Moss-style diorama: the city sits on your table and you play **one character from the third person**,
+walking its streets and smashing it from the inside. Zoom in to street level (the city is cut into a round
+diorama around your hero) or zoom out to see all of Tokyo.
+
+- **5 levels in Tokyo**, each with one clear goal (smash the glowing houses, wreck the cars, flatten a street,
+  topple the big towers, beat the army) and **3 stars**: **★ goal done, ★ faster than the par time, ★ nobody hurt**.
+  People run from you, but a careless punch or a building falling on them costs the third star.
+- **Grow as you progress:** you start as a **human**, become a **gorilla** at level 4, then a **robot**,
+  a **dinosaur** and finally the **kaiju**. Small forms cannot break the big towers ("TOO BIG! GROW STRONGER").
+- The next level opens with 1 star; the classic modes unlock after level 3.
+- **Controllers:** left stick walk (full tilt = run), A / trigger punch, X / left trigger kick, B jump,
+  right stick zoom, **hold grip and point at any surface** (a shelf, a box, an aquarium lid...) to move the city there.
+- **Hands only:** pinch the ground to walk there, pinch a building, car or tank to go and smash it,
+  pinch the hero to pick him up and carry him, two-hand pinch to zoom, + / − buttons next to the city.
+- **Desktop:** WASD (Shift run), J punch, K kick, Space jump, + / − zoom, 1-5 pick a level, R retry, N next.
+
+Hero models: Kenney Mini Characters, Quaternius Ultimate Monsters and RobotExpressive (all CC0,
+see `public/models/hero/LICENSE.txt`).
+
+## How to play (classic modes)
 
 1. Open the game in the Meta Quest browser and press **Enter Mixed Reality**.
 2. Look at a table. The city lands on it automatically (no table? it appears in front of you after a few seconds).
