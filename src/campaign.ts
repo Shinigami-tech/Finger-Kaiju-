@@ -32,11 +32,11 @@ export interface LevelDef {
 }
 
 export const LEVELS: LevelDef[] = [
-  { n: 1, city: 'TOKYO', title: 'WAKE UP, GIANT', story: 'Smash the 3 glowing houses', goal: { marked: 3 }, limit: 120, par: 50, sky: 0.12, theme: 4 },
-  { n: 2, city: 'TOKYO', title: 'RUSH HOUR', story: 'Punch the cars off the road', goal: { cars: 6 }, limit: 100, par: 35, sky: 0.3, theme: 4 },
+  { n: 1, city: 'TOKYO', title: 'WAKE UP, HAMSTER', story: 'Smash the 3 glowing houses', goal: { marked: 3 }, limit: 120, par: 50, sky: 0.12, theme: 4 },
+  { n: 2, city: 'TOKYO', title: 'RUSH HOUR', story: 'Grab cars, gnaw them, throw them!', goal: { cars: 6 }, limit: 100, par: 35, sky: 0.3, theme: 4 },
   { n: 3, city: 'TOKYO', title: 'BLOCK PARTY', story: 'Flatten a whole street', goal: { buildings: 8 }, limit: 120, par: 70, sky: 0.45, theme: 4 },
-  { n: 4, city: 'TOKYO', title: 'KING OF THE STREET', story: 'Gorilla power: topple the big ones', goal: { marked: 2, buildings: 8 }, markedMin: 0.07, limit: 130, par: 80, sky: 0.62, theme: 4 },
-  { n: 5, city: 'TOKYO', title: 'THE ARMY ARRIVES', story: 'Tanks! Beat them and keep smashing', goal: { tanks: 4, buildings: 6 }, limit: 150, par: 95, sky: 0.86, theme: 4 },
+  { n: 4, city: 'TOKYO', title: 'CHONKY POWER', story: 'Bigger hamster: topple the big ones', goal: { marked: 2, buildings: 8 }, markedMin: 0.07, limit: 130, par: 80, sky: 0.62, theme: 4 },
+  { n: 5, city: 'TOKYO', title: 'THE ARMY ARRIVES', story: 'Tanks and a helicopter! Throw cars at them', goal: { tanks: 4, buildings: 6 }, limit: 150, par: 95, sky: 0.86, theme: 4 },
 ];
 
 export const goalLines = (g: LevelGoal, p: Required<LevelGoal> | null) => {
@@ -177,6 +177,9 @@ export interface BoardState {
   newForm: string;
   countdown: number;
   best: number;
+  seeds: number;
+  god: number;
+  holding: boolean;
 }
 
 export class CampaignUi {
@@ -316,7 +319,7 @@ export class CampaignUi {
 
   /** the floating scoreboard */
   drawBoard(s: BoardState) {
-    const key = JSON.stringify([s.phase, s.level.n, Math.ceil(s.time), s.progress, s.hurt, Math.round(s.hp), s.shown, s.reason, Math.ceil(s.countdown), s.newForm]);
+    const key = JSON.stringify([s.phase, s.level.n, Math.ceil(s.time), s.progress, s.hurt, Math.round(s.hp), s.shown, s.reason, Math.ceil(s.countdown), s.newForm, s.seeds, Math.ceil(s.god), s.holding]);
     if (key === this.lastKey) return;
     this.lastKey = key;
     const p = this.board;
@@ -389,7 +392,7 @@ export class CampaignUi {
         g.font = '900 64px system-ui, "Arial Black", sans-serif';
         g.fillStyle = left <= 10 ? '#ff5a5a' : '#ffffff';
         g.fillText(fmt(left), W / 2, 420);
-        if (L.goal.tanks) {
+        if (L.n >= 2) {
           g.fillStyle = 'rgba(255,255,255,0.12)';
           rr(g, 200, 468, W - 400, 34, 17);
           g.fill();
@@ -397,10 +400,18 @@ export class CampaignUi {
           g.fillStyle = hp > 0.5 ? '#6fe08a' : hp > 0.25 ? '#ffcf3a' : '#ff5a5a';
           rr(g, 200, 468, Math.max(34, (W - 400) * hp), 34, 17);
           g.fill();
+        }
+        g.font = '800 28px system-ui, sans-serif';
+        if (s.god > 0) {
+          g.fillStyle = '#ffcf3a';
+          g.fillText(`\u2728 GOD MODE ${Math.ceil(s.god)}s: use YOUR hands! \u2728`, W / 2, L.n >= 2 ? 530 : 490);
         } else {
-          g.font = '700 28px system-ui, sans-serif';
           g.fillStyle = '#a9a3d6';
-          g.fillText('People run from you. Don’t hit them!', W / 2, 486);
+          g.fillText(
+            s.holding ? 'Hold GRAB to gnaw it  |  PUNCH to throw it' : `\u{1F33B} ${s.seeds} seeds   \u00B7   Don\u2019t hit the people!`,
+            W / 2,
+            L.n >= 2 ? 530 : 490,
+          );
         }
       }
       p.tex.needsUpdate = true;

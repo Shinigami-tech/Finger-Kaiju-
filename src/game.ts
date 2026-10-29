@@ -13,6 +13,7 @@ import {
   AssetManager,
   Color,
   ConeGeometry,
+  CanvasTexture,
   CylinderGeometry,
   createSystem,
   DirectionalLight,
@@ -33,6 +34,7 @@ import {
   Quaternion,
   RayInteractable,
   SphereGeometry,
+  SRGBColorSpace,
   Vector3,
   VisibilityState,
   XRPlane,
@@ -115,6 +117,7 @@ interface Car {
   state: 'drive' | 'held' | 'thrown' | 'dead';
   respawn: number;
   emergency: boolean;
+  police: boolean;
   sirens: Mesh[];
 }
 interface Person {
@@ -255,6 +258,9 @@ export class GameSystem extends createSystem({
   private reticleEntity!: Entity;
   private placing = false;
   private pinchZoom: { d0: number; z0: number } | null = null;
+  private seeds: { mesh: Mesh; pos: Vector3; active: boolean; roof: Entity | null }[] = [];
+  private golden!: { mesh: Mesh; pos: Vector3; active: boolean; life: number };
+  private policeCd = new Map<Car, number>();
   private camp = {
     phase: 'off' as 'off' | 'select' | 'intro' | 'play' | 'won' | 'lost',
     level: 0,
@@ -277,6 +283,17 @@ export class GameSystem extends createSystem({
     carry: null as Side | null,
     path: [] as Vector3[],
     blockT: 0,
+    held: null as { car?: Car; tank?: Entity; obj: Object3D } | null,
+    chewT: 0,
+    crumbT: 0,
+    autoChew: false,
+    throws: [] as { held: { car?: Car; tank?: Entity; obj: Object3D }; v: Vector3; spin: Vector3 }[],
+    seeds: 0,
+    powerT: 0,
+    godT: 0,
+    godSpawnAt: 25,
+    godDone: false,
+    heliT: 8,
     prevMode: 'rampage' as GameMode,
   };
   /** dev/testing: pin the time of day (null = follow the round) */
@@ -284,7 +301,7 @@ export class GameSystem extends createSystem({
   /** dev/testing: city-local point the desktop camera looks at */
   debugLook: Vector3 | null = null;
   /** dev/testing: virtual stick + punch for scripted campaign tests */
-  testInput: { x: number; y: number; punch?: boolean; run?: boolean } | null = null;
+  testInput: { x: number; y: number; punch?: boolean; run?: boolean; grab?: boolean; chew?: boolean; jump?: boolean } | null = null;
   /** dev/testing: ?campaign=N jumps straight into campaign level N */
   private autoLevel = (() => {
     if (!import.meta.env.DEV) return -1;
@@ -447,6 +464,36 @@ export class GameSystem extends createSystem({
     this.reticle.name = 'PlaceReticle';
     this.reticle.visible = false;
     this.reticleEntity = this.world.createTransformEntity(this.reticle);
+    // sunflower seeds (striped) + the rare golden seed
+    const seedCanvas = document.createElement('canvas');
+    seedCanvas.width = 64;
+    seedCanvas.height = 16;
+    const sg = seedCanvas.getContext('2d')!;
+    sg.fillStyle = '#2b2622';
+    sg.fillRect(0, 0, 64, 16);
+    sg.fillStyle = '#e9e2cf';
+    for (let k = 0; k < 8; k++) sg.fillRect(k * 8 + 2, 0, 2, 16);
+    const seedTex = new CanvasTexture(seedCanvas);
+    seedTex.colorSpace = SRGBColorSpace;
+    const seedGeo = new SphereGeometry(1, 14, 10);
+    seedGeo.scale(0.0026, 0.0018, 0.0048);
+    const seedMat = new MeshStandardMaterial({ map: seedTex, roughness: 0.55 });
+    for (let k = 0; k < 16; k++) {
+      const m = new Mesh(seedGeo, seedMat);
+      m.castShadow = true;
+      m.visible = false;
+      m.rotation.x = 0.5;
+      this.city.add(m);
+      this.seeds.push({ mesh: m, pos: new Vector3(), active: false, roof: null });
+    }
+    const gm = new Mesh(seedGeo, new MeshStandardMaterial({ color: 0xffcf3a, emissive: 0xffa000, emissiveIntensity: 1.1, metalness: 0.6, roughness: 0.25 }));
+    gm.scale.setScalar(1.8);
+    const halo = new Mesh(new SphereGeometry(0.009, 16, 10), new MeshBasicMaterial({ color: 0xffd860, transparent: true, opacity: 0.35, blending: AdditiveBlending, depthWrite: false }));
+    gm.add(halo);
+    halo.scale.set(1 / 0.0026 * 0.0048, 1 / 0.0018 * 0.0048, 1);
+    gm.visible = false;
+    this.city.add(gm);
+    this.golden = { mesh: gm, pos: new Vector3(), active: false, life: 0 };
 
     // shells
     const shellGeo = new SphereGeometry(0.0035, 10, 8);
@@ -528,13 +575,13 @@ export class GameSystem extends createSystem({
     this.cleanupFuncs.push(
       this.queries.pressedBuildings.subscribe('qualify', (e) => {
         this.sfx.unlock();
-        if (!this.canScore() || this.camp.phase !== 'off') return;
+        if (!this.canScore() || (this.camp.phase !== 'off' && this.camp.godT <= 0)) return;
         const o = e.object3D;
         if (o) this.smash(e, this.a.copy(o.position).setY(o.position.y + 0.02), 1.2, 1);
       }),
       this.queries.pressedTanks.subscribe('qualify', (e) => {
         this.sfx.unlock();
-        if (this.camp.phase !== 'off') return;
+        if (this.camp.phase !== 'off' && this.camp.godT <= 0) return;
         if (e.getValue(Tank, 'alive')) this.killTank(e, 60, 'TANK!');
       }),
       this.queries.pressedOrb.subscribe('qualify', () => this.restart()),
@@ -551,7 +598,7 @@ export class GameSystem extends createSystem({
       }),
       this.queries.pressedVehicles.subscribe('qualify', (e) => {
         this.sfx.unlock();
-        if (!this.canScore() || this.camp.phase !== 'off') return;
+        if (!this.canScore() || (this.camp.phase !== 'off' && this.camp.godT <= 0)) return;
         const i = e.getValue(Vehicle, 'index') ?? 0;
         if (i < 0) {
           if (this.heli?.evasive) this.catchHeli();
@@ -730,9 +777,9 @@ export class GameSystem extends createSystem({
     const tips: Record<GameMode, [string, string][]> = xr
       ? {
           campaign: [
-            ['1', 'LEFT STICK walk  |  A / TRIGGER punch'],
-            ['2', 'No controller? PINCH the ground to walk, PINCH a house to smash it'],
-            ['3', 'Right stick or + / - : zoom in and out'],
+            ['1', 'LEFT STICK walk  |  A punch  |  B jump on roofs'],
+            ['2', 'X: GRAB a car, hold X to GNAW, A to THROW'],
+            ['3', 'Eat seeds. GOLDEN seed = 15 s GOD MODE'],
           ],
           blitz: [
             ['1', 'TOUCH or PUNCH buildings to smash them'],
@@ -757,9 +804,9 @@ export class GameSystem extends createSystem({
         }
       : {
           campaign: [
-            ['1', 'W A S D walk  |  SHIFT run'],
-            ['2', 'J punch  |  K kick  |  SPACE jump'],
-            ['3', '+ / - zoom in and out'],
+            ['1', 'WASD walk (SHIFT run)  |  SPACE jump on roofs'],
+            ['2', 'E grab a car, hold E gnaw, J punch / throw'],
+            ['3', '+ / - zoom  |  eat seeds, find the GOLDEN one'],
           ],
           blitz: [
             ['1', 'CLICK buildings to smash them'],
@@ -1079,6 +1126,7 @@ export class GameSystem extends createSystem({
         state: 'drive',
         respawn: 0,
         emergency: EMERGENCY.has(protos[i % protos.length].key),
+        police: protos[i % protos.length].key === 'car/police',
         sirens: ['sirenR', 'sirenB'].map((n) => obj.getObjectByName(n)).filter((m): m is Mesh => !!m),
       });
     }
@@ -2047,7 +2095,7 @@ export class GameSystem extends createSystem({
   }
 
   private handleHands(dt: number) {
-    if (this.camp.phase !== 'off') return this.campaignHands(dt);
+    if (this.camp.phase !== 'off' && this.camp.godT <= 0) return this.campaignHands(dt);
     const s = this.city.scale.x;
     const L = this.hands.hands.left;
     const R = this.hands.hands.right;
@@ -2933,6 +2981,14 @@ export class GameSystem extends createSystem({
     this.camp.goActor = null;
     this.camp.carry = null;
     this.camp.tankT = 3;
+    this.camp.heliT = 10;
+    this.camp.held = null;
+    this.camp.throws.length = 0;
+    this.camp.seeds = 0;
+    this.camp.powerT = 0;
+    this.camp.godT = 0;
+    this.camp.autoChew = false;
+    this.policeCd.clear();
     const form = formForLevel(L.n);
     this.camp.newForm = form.level === L.n && L.n > 1 ? form.name : '';
     void this.hero.setForm(form);
@@ -2982,7 +3038,10 @@ export class GameSystem extends createSystem({
         if (!this.camp.targets.includes(c.e)) this.camp.targets.push(c.e);
       }
     }
-    if (this.zoomT < 2.4) this.zoomT = 3;
+    if (this.zoomT < 1.8) this.zoomT = 2.2;
+    this.spawnSeeds();
+    this.hero.root.position.y = 0;
+    this.hero.airborne = false;
     this.bubble.patch(this.city);
     for (const m of [sirenRedMat, sirenBlueMat, sirenOffMat]) this.bubble.patchMaterial(m);
     this.hp = 100;
@@ -3011,6 +3070,21 @@ export class GameSystem extends createSystem({
       if (nf.level === LEVELS[this.camp.level + 1].n) this.camp.newForm = nf.name;
     }
     for (const mk of this.markers) mk.visible = false;
+    this.camp.godT = 0;
+    this.hero.chew = 0;
+    if (this.camp.held) {
+      const hd = this.camp.held;
+      hd.obj.position.set(hd.obj.position.x, 0.002, hd.obj.position.z);
+      hd.obj.rotation.set(0, 0, 0);
+      hd.obj.scale.setScalar(1);
+      if (hd.car) hd.car.state = 'drive';
+      if (hd.tank) hd.tank.setValue(Tank, 'held', false);
+      this.camp.held = null;
+    }
+    if (this.heli && this.heli.state !== 'off') {
+      this.heli.state = 'off';
+      this.heli.obj.visible = false;
+    }
     for (const e of this.queries.tanks.entities) if (e.getValue(Tank, 'alive')) this.hideTank(e);
     for (const sh of this.shells) {
       sh.active = false;
@@ -3085,7 +3159,7 @@ export class GameSystem extends createSystem({
     const follow = this.camp.phase === 'select' ? 0 : Math.min(1, Math.max(0, (zv - 1) / 1.2));
     this.a.copy(this.heroPos).setY(0).multiplyScalar(follow);
     // keep the diorama cut inside the city
-    const lim = Math.max(0, HALF - 0.32 / zv);
+    const lim = Math.max(0, HALF - 0.2 / zv);
     this.a.x = Math.max(-lim, Math.min(lim, this.a.x));
     this.a.z = Math.max(-lim, Math.min(lim, this.a.z));
     this.focus.lerp(this.a, Math.min(1, dt * 5));
@@ -3096,8 +3170,8 @@ export class GameSystem extends createSystem({
     this.city.position.copy(this.anchor).sub(this.a);
     this.sunTarget.position.copy(this.focus);
     // diorama cut once the city is bigger than the "bubble"
-    const R = 0.34;
-    this.bubble.radius.value = HALF * zv > R + 0.02 ? R : 0;
+    const R = 0.36;
+    this.bubble.radius.value = HALF * zv > R + 0.04 ? R : 0;
     this.bubble.center.copy(this.anchor);
     this.bubble.update(dt, this.anchor.y, 0.035);
     this.fx.textScale = 1 / Math.pow(zv, 0.75);
@@ -3240,10 +3314,10 @@ export class GameSystem extends createSystem({
   private dropHero() {
     this.camp.carry = null;
     this.hero.carried = false;
-    this.hero.root.position.y = 0;
     this.fx.puff(this.heroPos, 0.004, 6);
     this.sfx.pop();
-    this.hero.jumpT = 0.25;
+    this.hero.airborne = true;
+    this.hero.vy = 0;
   }
 
   private grid = new Uint8Array(0);
@@ -3315,16 +3389,49 @@ export class GameSystem extends createSystem({
     return true;
   }
 
-  /** move with collisions; returns false if blocked */
+  /** height of the roof under a point (0 = street) */
+  private groundAt(x: number, z: number) {
+    let g = 0;
+    for (const e of this.queries.buildings.entities) {
+      if (!e.getValue(Building, 'alive')) continue;
+      const o = e.object3D;
+      if (!o) continue;
+      const half = ((e.getValue(Building, 'width') ?? 0.03) / 2) * 0.85;
+      if (Math.abs(x - o.position.x) < half && Math.abs(z - o.position.z) < half) g = Math.max(g, e.getValue(Building, 'height') ?? 0);
+    }
+    return g;
+  }
+
+  private buildingUnder(x: number, z: number): Entity | null {
+    let best: Entity | null = null;
+    let bh = -1;
+    for (const e of this.queries.buildings.entities) {
+      if (!e.getValue(Building, 'alive')) continue;
+      const o = e.object3D;
+      if (!o) continue;
+      const half = ((e.getValue(Building, 'width') ?? 0.03) / 2) * 0.85;
+      const h = e.getValue(Building, 'height') ?? 0;
+      if (Math.abs(x - o.position.x) < half && Math.abs(z - o.position.z) < half && h > bh) {
+        bh = h;
+        best = e;
+      }
+    }
+    return best;
+  }
+
+  /** move with collisions (roofs you are above or can step onto don't block); returns false if blocked */
   private moveHero(dx: number, dz: number) {
     const form = this.hero.form;
     const r = this.hero.radius;
+    const y = this.hero.root.position.y;
     let nx = this.heroPos.x + dx;
     let nz = this.heroPos.z + dz;
     for (const e of this.queries.buildings.entities) {
       if (!e.getValue(Building, 'alive')) continue;
       const o = e.object3D;
       if (!o) continue;
+      const h = e.getValue(Building, 'height') ?? 0.05;
+      if (h <= y + form.height * 0.12) continue; // on top of it, or a tiny step
       const half = ((e.getValue(Building, 'width') ?? 0.03) / 2) * 0.9;
       const cx = Math.max(o.position.x - half, Math.min(nx, o.position.x + half));
       const cz = Math.max(o.position.z - half, Math.min(nz, o.position.z + half));
@@ -3332,7 +3439,6 @@ export class GameSystem extends createSystem({
       const oz = nz - cz;
       const d2 = ox * ox + oz * oz;
       if (d2 >= r * r) continue;
-      const h = e.getValue(Building, 'height') ?? 0.05;
       // big forms just walk through small stuff
       if (form.stomp > 0 && h < form.power * form.stomp && this.canScore()) {
         this.smash(e, this.a.copy(this.heroPos).setY(0.01), 1.4, 1, 'STOMP ');
@@ -3340,7 +3446,6 @@ export class GameSystem extends createSystem({
       }
       const d = Math.sqrt(d2);
       if (d < 1e-5) {
-        // centre inside the footprint: push straight back out along the move
         nx = this.heroPos.x;
         nz = this.heroPos.z;
         continue;
@@ -3357,21 +3462,298 @@ export class GameSystem extends createSystem({
     return moved > Math.hypot(dx, dz) * 0.3;
   }
 
+  /** nearest car (or tank, for the bigger forms) the hamster can grab */
+  private grabbable(maxD: number): { car?: Car; tank?: Entity; obj: Object3D } | null {
+    let best: { car?: Car; tank?: Entity; obj: Object3D } | null = null;
+    let bd = maxD;
+    const fx = Math.sin(this.hero.yaw);
+    const fz = Math.cos(this.hero.yaw);
+    const px = this.heroPos.x + fx * this.hero.radius;
+    const pz = this.heroPos.z + fz * this.hero.radius;
+    for (const car of this.cars) {
+      if (car.state !== 'drive') continue;
+      const d = Math.hypot(car.obj.position.x - px, car.obj.position.z - pz);
+      if (d < bd) {
+        bd = d;
+        best = { car, obj: car.obj };
+      }
+    }
+    if (this.hero.form.lifts) {
+      for (const e of this.queries.tanks.entities) {
+        const o = e.object3D;
+        if (!o || !e.getValue(Tank, 'alive')) continue;
+        const d = Math.hypot(o.position.x - px, o.position.z - pz);
+        if (d < bd) {
+          bd = d;
+          best = { tank: e, obj: o };
+        }
+      }
+    }
+    return best;
+  }
+
+  private tryGrabVehicle() {
+    if (this.camp.held || this.hero.root.position.y > this.hero.form.height * 0.5) return false;
+    const g = this.grabbable(this.hero.radius + this.hero.form.height * 0.45);
+    if (!g) return false;
+    if (g.car) g.car.state = 'held';
+    if (g.tank) g.tank.setValue(Tank, 'held', true);
+    this.camp.held = g;
+    this.camp.chewT = 0;
+    this.sfx.grab();
+    this.c.copy(g.obj.position).setY(0.02);
+    this.fx.popup(this.c, 'GOT IT!', '#9ef0ff');
+    return true;
+  }
+
+  /** throw what we hold: it flies in an arc and smashes whatever it hits */
+  private throwHeld() {
+    const hd = this.camp.held;
+    if (!hd) return;
+    const s = this.hero.form.height;
+    const fx = Math.sin(this.hero.yaw);
+    const fz = Math.cos(this.hero.yaw);
+    const k = Math.sqrt(s / 0.03);
+    this.camp.throws.push({ held: hd, v: new Vector3(fx * 0.42 * k, 0.32 * k, fz * 0.42 * k), spin: new Vector3(6, 3, 9) });
+    this.camp.held = null;
+    this.hero.chew = 0;
+    this.hero.attack('punch');
+    this.sfx.rip();
+  }
+
+  private updateThrows(dt: number) {
+    const g = 1.3;
+    const form = this.hero.form;
+    for (let i = this.camp.throws.length - 1; i >= 0; i--) {
+      const t = this.camp.throws[i];
+      const o = t.held.obj;
+      t.v.y -= g * dt;
+      o.position.addScaledVector(t.v, dt);
+      o.rotation.x += t.spin.x * dt;
+      o.rotation.z += t.spin.z * dt;
+      let hit: 'ground' | 'building' | 'heli' | 'tank' | null = null;
+      let hb: Entity | null = null;
+      if (o.position.y <= 0.003) hit = 'ground';
+      if (!hit) {
+        for (const e of this.queries.buildings.entities) {
+          if (!e.getValue(Building, 'alive')) continue;
+          const bo = e.object3D;
+          if (!bo) continue;
+          const half = (e.getValue(Building, 'width') ?? 0.03) / 2;
+          if (Math.abs(o.position.x - bo.position.x) < half && Math.abs(o.position.z - bo.position.z) < half && o.position.y < (e.getValue(Building, 'height') ?? 0)) {
+            hit = 'building';
+            hb = e;
+            break;
+          }
+        }
+      }
+      const hl = this.heli;
+      if (!hit && hl && hl.state === 'fly' && hl.obj.position.distanceTo(o.position) < 0.03 + form.height * 0.3) hit = 'heli';
+      if (!hit) {
+        for (const e of this.queries.tanks.entities) {
+          const to = e.object3D;
+          if (!to || !e.getValue(Tank, 'alive') || e === t.held.tank) continue;
+          if (to.position.distanceTo(o.position) < 0.02) {
+            hit = 'tank';
+            hb = e;
+            break;
+          }
+        }
+      }
+      if (!hit) continue;
+      this.camp.throws.splice(i, 1);
+      const p = this.c.copy(o.position);
+      this.fx.ring(this.a.copy(p).setY(0.002), 0.05, 0xff8a3a, 0.4);
+      this.fx.spark(p, 16, 0.5);
+      this.sfx.boom();
+      this.hitStop(0.06);
+      if (hit === 'building' && hb) {
+        const h = hb.getValue(Building, 'height') ?? 0.05;
+        if (h <= form.power * 1.6) this.smash(hb, p, 2, 1.2, 'THROW ');
+        else {
+          this.wobble(hb, hb.object3D!, 0.06, 0);
+          this.fx.popup(this.a.copy(p).setY(p.y + 0.02), 'TOO BIG!', '#ff8a5a');
+        }
+      } else if (hit === 'heli') this.killHeli('HELI DOWN ');
+      else if (hit === 'tank' && hb) this.killTank(hb, 80, 'TANK HIT ');
+      // people under the impact get hurt
+      for (const pp of this.people) {
+        if (pp.state !== 'down' && Math.hypot(pp.obj.position.x - p.x, pp.obj.position.z - p.z) < 0.02) this.hurtPerson(pp, p);
+      }
+      o.rotation.set(0, 0, 0);
+      o.position.y = 0.002;
+      if (t.held.car) this.wreckCar(t.held.car, p);
+      if (t.held.tank) this.killTank(t.held.tank, 60, 'SPLAT ');
+    }
+  }
+
+  /** sunflower seeds: snacks on streets and roofs (+time, +health, cheeks full = super punch) */
+  private spawnSeeds() {
+    const L = LEVELS[this.camp.level];
+    const n = Math.min(this.seeds.length, 10 + L.n);
+    const roofs = [...this.queries.buildings.entities].filter((e) => e.getValue(Building, 'alive') && (e.getValue(Building, 'height') ?? 1) < this.hero.form.height * 1.5);
+    for (let i = 0; i < this.seeds.length; i++) {
+      const sd = this.seeds[i];
+      sd.active = i < n;
+      sd.mesh.visible = sd.active;
+      sd.roof = null;
+      if (!sd.active) continue;
+      if (i % 3 === 0 && roofs.length) {
+        const e = roofs.splice(Math.floor(Math.random() * roofs.length), 1)[0];
+        sd.roof = e;
+        sd.pos.copy(e.object3D!.position).setY(e.getValue(Building, 'height') ?? 0);
+      } else {
+        sd.pos.set(SIDEWALK[Math.floor(Math.random() * SW_N)], 0, SIDEWALK[Math.floor(Math.random() * SW_N)]);
+        sd.pos.x += (Math.random() - 0.5) * 0.08;
+        sd.pos.x = Math.max(-HALF + 0.02, Math.min(HALF - 0.02, sd.pos.x));
+      }
+    }
+    this.golden.active = false;
+    this.golden.mesh.visible = false;
+    this.camp.godSpawnAt = 18 + Math.random() * 14;
+    this.camp.godDone = false;
+  }
+
+  private updateSeeds(dt: number) {
+    const play = this.camp.phase === 'play';
+    const hx = this.heroPos.x;
+    const hz = this.heroPos.z;
+    const hy = this.hero.root.position.y;
+    const reach = this.hero.radius + 0.008;
+    for (const sd of this.seeds) {
+      if (!sd.active) continue;
+      if (sd.roof && !sd.roof.getValue(Building, 'alive')) {
+        sd.roof = null;
+        sd.pos.y = 0;
+      }
+      sd.mesh.position.set(sd.pos.x, sd.pos.y + 0.004 + Math.sin(this.now * 3 + sd.pos.x * 50) * 0.0015, sd.pos.z);
+      sd.mesh.rotation.y += dt * 2;
+      if (!play || Math.hypot(sd.pos.x - hx, sd.pos.z - hz) > reach || Math.abs(sd.pos.y - hy) > this.hero.form.height * 0.6) continue;
+      sd.active = false;
+      sd.mesh.visible = false;
+      this.camp.seeds++;
+      this.time += 3;
+      this.hp = Math.min(100, this.hp + 15);
+      this.c.copy(sd.mesh.position).setY(sd.pos.y + 0.03);
+      this.fx.popup(this.c, '+3s  NOM!', '#ffe9a6');
+      this.fx.spark(this.c, 8, 0.2, 0xffe066);
+      this.sfx.pop();
+      this.sfx.combo(2 + (this.camp.seeds % 5));
+      if (this.camp.seeds % 5 === 0) {
+        this.camp.powerT = 8;
+        this.fx.popup(this.a.copy(this.c).setY(this.c.y + 0.02), 'CHEEKS FULL! SUPER PUNCH', '#ff8a3a');
+        this.sfx.roar(0.5);
+      }
+    }
+    // the golden seed: a rare 15 s of GOD MODE (your own hands smash the city)
+    const gs = this.golden;
+    if (play && !this.camp.godDone && !gs.active && this.elapsed > this.camp.godSpawnAt) {
+      gs.active = true;
+      gs.life = 14;
+      this.camp.godDone = true;
+      // somewhere the hero can reach, not too far
+      for (let k = 0; k < 20; k++) {
+        gs.pos.set(SIDEWALK[Math.floor(Math.random() * SW_N)], 0, SIDEWALK[Math.floor(Math.random() * SW_N)]);
+        if (Math.hypot(gs.pos.x - hx, gs.pos.z - hz) < 0.2) break;
+      }
+      this.ticker.push('A GOLDEN SEED APPEARED! Eat it for GOD MODE', true);
+      this.c.copy(gs.pos).setY(0.05);
+      this.fx.popup(this.c, 'GOLDEN SEED!', '#ffcf3a');
+      this.sfx.zap();
+    }
+    if (gs.active) {
+      gs.life -= dt;
+      gs.mesh.visible = gs.life > 3 || Math.sin(this.now * 20) > 0;
+      gs.mesh.position.set(gs.pos.x, 0.008 + Math.sin(this.now * 4) * 0.003, gs.pos.z);
+      gs.mesh.rotation.y += dt * 3;
+      if (gs.life <= 0) {
+        gs.active = false;
+        gs.mesh.visible = false;
+      } else if (play && Math.hypot(gs.pos.x - hx, gs.pos.z - hz) < reach + 0.004 && hy < this.hero.form.height) {
+        gs.active = false;
+        gs.mesh.visible = false;
+        this.camp.godT = 15;
+        this.zoomT = Math.min(this.zoomT, 1.6);
+        this.sfx.roar(1);
+        this.sfx.start();
+        this.c.copy(gs.pos).setY(0.05);
+        this.fx.ring(this.c.setY(0.002), 0.25, 0xffcf3a, 0.8);
+        this.fx.popup(this.a.copy(gs.pos).setY(0.06), 'GOD MODE! 15s', '#ffcf3a');
+        this.coach.show('GOD MODE', [['1', 'For 15 seconds YOUR hands are the monster'], ['2', 'Punch, grab, throw, slam the table!'], ['3', 'Catch the helicopter!']], 5);
+      }
+    }
+    if (this.camp.godT > 0) {
+      this.camp.godT -= dt;
+      if (this.camp.godT <= 0) {
+        this.camp.godT = 0;
+        for (const side of SIDES) this.held[side] = null;
+        this.fx.popup(this.c.copy(this.heroPos).setY(0.05), 'GOD MODE OVER', '#d0caf5');
+      }
+    }
+    this.camp.powerT = Math.max(0, this.camp.powerT - dt);
+    this.hero.cheeks += ((this.camp.powerT > 0 ? 1 : 0) - this.hero.cheeks) * Math.min(1, dt * 6);
+  }
+
+  /** police cars and the attack helicopter shoot at the hamster */
+  private updateDefense(dt: number) {
+    const L = LEVELS[this.camp.level];
+    if (this.camp.phase !== 'play' || !this.canScore() || this.camp.godT > 0) return;
+    const tgt = this.localTips[0];
+    if (L.n >= 2) {
+      for (const car of this.cars) {
+        if (!car.police || car.state !== 'drive') continue;
+        let cd = (this.policeCd.get(car) ?? 1 + Math.random() * 2) - dt;
+        const d = Math.hypot(car.obj.position.x - tgt.x, car.obj.position.z - tgt.z);
+        if (cd <= 0 && d < 0.24) {
+          this.fire(this.a.copy(car.obj.position).setY(0.012), tgt, 0.2);
+          cd = 2.4 + Math.random() * 1.6;
+          if (this.once('police')) this.ticker.push('POLICE OPEN FIRE ON GIANT HAMSTER', true);
+        }
+        this.policeCd.set(car, cd);
+      }
+    }
+    // the attack helicopter joins from level 4
+    const h = this.heli;
+    if (L.n >= 4 && h && h.state === 'off') {
+      this.camp.heliT -= dt;
+      if (this.camp.heliT <= 0) {
+        this.camp.heliT = 25;
+        h.evasive = false;
+        h.speed = 1;
+        h.state = 'fly';
+        h.obj.visible = true;
+        h.angle = Math.random() * Math.PI * 2;
+        h.alt = 0.12;
+        h.cd = 3;
+        h.obj.position.set(Math.cos(h.angle) * 0.5, 0.14, Math.sin(h.angle) * 0.5);
+        h.yaw = Math.atan2(-h.obj.position.z, h.obj.position.x) + Math.PI;
+        h.vel.set(-Math.cos(h.angle), 0, -Math.sin(h.angle)).multiplyScalar(0.12);
+        h.goal.set(this.heroPos.x, h.alt, this.heroPos.z);
+        h.goalT = 0;
+        this.sfx.zap();
+        this.ticker.push('ARMY HELICOPTER HUNTS THE HAMSTER. Throw a car at it!', true);
+      }
+    }
+  }
+
   private updateHero(dt: number) {
     const ph = this.camp.phase;
     if (ph === 'off' || ph === 'select' || !this.hero.root.visible) {
       if (this.camp.phase !== 'off' && this.camp.phase !== 'select') this.hero.update(dt);
       return;
     }
-    const form = this.hero.form;
+    const hero = this.hero;
+    const form = hero.form;
     const L = LEVELS[this.camp.level];
     let mx = 0;
     let mz = 0;
     let run = false;
     let punch = false;
-    let kick = false;
+    let grab = false;
+    let grabHeld = false;
     let jump = false;
-    if (ph === 'play' && this.canScore() && !this.hero.carried) {
+    const god = this.camp.godT > 0;
+    if (ph === 'play' && this.canScore() && !hero.carried && !god) {
       const lp = this.input.gamepads.left;
       const rp = this.input.gamepads.right;
       const kb = this.input.keyboard;
@@ -3383,7 +3765,8 @@ export class GameSystem extends createSystem({
           sx = ax.x;
           sy = ax.y;
         }
-        if (lp.getButtonDown(InputComponent.X_Button) || lp.getSelectStart()) kick = true;
+        if (lp.getButtonDown(InputComponent.X_Button) || lp.getSelectStart()) grab = true;
+        if (lp.getButtonPressed(InputComponent.X_Button) || lp.getSelecting()) grabHeld = true;
         if (lp.getButtonDown(InputComponent.Y_Button)) jump = true;
       }
       if (rp) {
@@ -3396,7 +3779,8 @@ export class GameSystem extends createSystem({
       if (kb.getKeyPressed('KeyD') || kb.getKeyPressed('ArrowRight')) sx += 1;
       if (kb.getKeyPressed('ShiftLeft') || kb.getKeyPressed('ShiftRight')) run = true;
       if (kb.getKeyDown('KeyJ') || kb.getKeyDown('KeyF')) punch = true;
-      if (kb.getKeyDown('KeyK')) kick = true;
+      if (kb.getKeyDown('KeyE') || kb.getKeyDown('KeyK')) grab = true;
+      if (kb.getKeyPressed('KeyE') || kb.getKeyPressed('KeyK')) grabHeld = true;
       if (kb.getKeyDown('Space')) jump = true;
       const ti = this.testInput;
       if (ti) {
@@ -3404,7 +3788,12 @@ export class GameSystem extends createSystem({
         sy += ti.y;
         punch ||= !!ti.punch;
         run ||= !!ti.run;
+        grab ||= !!ti.grab;
+        grabHeld ||= !!ti.chew;
+        jump ||= !!ti.jump;
         ti.punch = false;
+        ti.grab = false;
+        ti.jump = false;
       }
       let mag = Math.min(1, Math.hypot(sx, sy));
       if (mag > 0.15) {
@@ -3430,11 +3819,11 @@ export class GameSystem extends createSystem({
         this.camp.goActor = null;
         this.camp.path.length = 0;
       } else mag = 0;
-      // hand command: follow the planned street path, then punch the pinched building
+      // hand command: follow the planned street path, then punch / grab the pinched thing
       const goal = this.camp.goTo;
       const actor = this.camp.goActor;
       if (mag === 0 && actor && goal) {
-        if (!actor.visible || actor.scale.y < 0.5) {
+        if (!actor.visible || actor.scale.y < 0.5 || this.camp.held) {
           this.camp.goActor = null;
           this.camp.goTo = null;
         } else {
@@ -3442,9 +3831,10 @@ export class GameSystem extends createSystem({
           const gx = goal.x - this.heroPos.x;
           const gz = goal.z - this.heroPos.z;
           const gd = Math.hypot(gx, gz);
-          if (gd <= this.hero.radius + form.height * 0.3) {
-            this.hero.yaw = Math.atan2(gx, gz);
-            punch = true;
+          if (gd <= hero.radius + form.height * 0.4) {
+            hero.yaw = Math.atan2(gx, gz);
+            if (!this.tryGrabVehicle()) punch = true;
+            else this.camp.autoChew = true;
           } else {
             mx = gx / gd;
             mz = gz / gd;
@@ -3459,15 +3849,19 @@ export class GameSystem extends createSystem({
           this.camp.goEntity = null;
           this.camp.path.length = 0;
         } else {
-          const reach = ge ? (ge.getValue(Building, 'width') ?? 0.03) / 2 + this.hero.radius + form.height * 0.22 : 0.005;
+          const reach = ge ? (ge.getValue(Building, 'width') ?? 0.03) / 2 + hero.radius + form.height * 0.22 : 0.005;
           const gx = goal.x - this.heroPos.x;
           const gz = goal.z - this.heroPos.z;
           const gd = Math.hypot(gx, gz);
           if (gd <= reach) {
             this.camp.path.length = 0;
             if (ge) {
-              this.hero.yaw = Math.atan2(gx, gz);
-              punch = true;
+              hero.yaw = Math.atan2(gx, gz);
+              if (this.camp.held) {
+                this.throwHeld();
+                this.camp.goTo = null;
+                this.camp.goEntity = null;
+              } else punch = true;
             } else this.camp.goTo = null;
           } else {
             if (this.camp.path.length === 0 && !this.planPath(goal, ge)) {
@@ -3488,12 +3882,13 @@ export class GameSystem extends createSystem({
           }
         }
       }
-      if (mag > 0) {
-        const sp = form.speed * (run ? 1.9 : 1) * Math.max(0.35, mag);
+      const chewing = !!this.camp.held && (grabHeld || this.camp.autoChew) && !grab;
+      if (mag > 0 && !chewing) {
+        const sp = form.speed * (run ? 1.9 : 1) * Math.max(0.35, mag) * (this.camp.held ? 0.8 : 1);
         const ok = this.moveHero(mx * sp * dt, mz * sp * dt);
         const want = Math.atan2(mx, mz);
-        this.hero.yaw += wrapAngle(want - this.hero.yaw) * Math.min(1, dt * 12);
-        this.hero.moving = run ? 1 : 0.5;
+        hero.yaw += wrapAngle(want - hero.yaw) * Math.min(1, dt * 12);
+        hero.moving = run ? 1 : 0.5;
         if (!ok && this.camp.goTo) {
           this.camp.blockT += dt;
           if (this.camp.blockT > 0.35) {
@@ -3502,19 +3897,97 @@ export class GameSystem extends createSystem({
           }
         } else this.camp.blockT = 0;
         this.camp.stepT -= dt;
-        if (this.camp.stepT <= 0 && this.hero.jumpT <= 0) {
-          this.camp.stepT = run ? 0.22 : 0.34;
-          this.fx.puff(this.c.copy(this.heroPos).setY(0.001), 0.001, run ? 2 : 1);
+        if (this.camp.stepT <= 0 && !hero.airborne) {
+          this.camp.stepT = run ? 0.2 : 0.3;
+          this.fx.puff(this.c.copy(this.heroPos).setY(hero.root.position.y + 0.001), 0.001, run ? 2 : 1);
         }
-      } else this.hero.moving = 0;
-      if (punch) this.hero.attack('punch');
-      else if (kick) this.hero.attack('kick');
-      if (jump && this.hero.jump()) this.sfx.pop();
-    } else this.hero.moving = 0;
-    if (!this.hero.carried) this.hero.root.position.set(this.heroPos.x, 0, this.heroPos.z);
-    if (this.hero.attackLands()) this.heroStrike();
+      } else hero.moving = 0;
+      // grab a car (or tank) / gnaw it / throw it
+      if (this.camp.held) {
+        if (punch) this.throwHeld();
+        else if (chewing) {
+          hero.chew = 1;
+          this.camp.chewT += dt;
+          this.camp.crumbT -= dt;
+          if (this.camp.crumbT <= 0) {
+            this.camp.crumbT = 0.16;
+            this.c.copy(this.camp.held.obj.position);
+            this.fx.spark(this.c, 5, 0.12, Math.random() < 0.5 ? 0xd8d8d8 : 0x3f8fe8);
+            if (Math.random() < 0.3) this.fx.puff(this.c, 0.001, 1);
+            this.sfx.crunch(0.2, false);
+          }
+          this.camp.held.obj.scale.setScalar(Math.max(0.35, 1 - this.camp.chewT / 2.4));
+          if (this.camp.chewT > 1.8) {
+            const hd = this.camp.held;
+            this.camp.held = null;
+            this.camp.autoChew = false;
+            hero.chew = 0;
+            this.c.copy(hd.obj.position);
+            this.fx.popup(this.a.copy(this.c).setY(this.c.y + 0.02), 'NOM NOM NOM!', '#ffe066');
+            this.sfx.combo(6);
+            hd.obj.scale.setScalar(1);
+            hd.obj.position.set(this.heroPos.x + Math.sin(hero.yaw) * hero.radius, 0.002, this.heroPos.z + Math.cos(hero.yaw) * hero.radius);
+            if (hd.car) {
+              this.wreckCar(hd.car, this.c);
+              hd.car.obj.visible = false;
+            }
+            if (hd.tank) this.killTank(hd.tank, 80, 'EATEN ');
+          }
+        } else hero.chew = 0;
+      } else {
+        hero.chew = 0;
+        if (grab && !this.tryGrabVehicle()) punch = true;
+        if (punch) hero.attack('punch');
+      }
+      if (jump) {
+        const v = Math.sqrt(2 * form.height * 40 * form.height * 1.7);
+        if (hero.jump(v)) this.sfx.pop();
+      }
+    } else hero.moving = 0;
+
+    // vertical: gravity, roofs, landing slams
+    if (!hero.carried) {
+      const g = form.height * 40;
+      const ground = this.groundAt(this.heroPos.x, this.heroPos.z);
+      hero.ground = ground;
+      let y = hero.root.position.y;
+      if (!hero.airborne && y > ground + 0.0008) {
+        hero.airborne = true;
+        hero.vy = 0;
+      }
+      if (hero.airborne) {
+        hero.vy -= g * dt;
+        y += hero.vy * dt;
+        if (y <= ground) {
+          const impact = -hero.vy;
+          y = ground;
+          hero.airborne = false;
+          hero.land(impact);
+          this.fx.puff(this.c.copy(this.heroPos).setY(ground + 0.001), 0.002, 4);
+          if (ground > 0 && impact > form.height * 4 && ph === 'play') this.roofSlam();
+          hero.vy = 0;
+        }
+      } else y = ground;
+      hero.root.position.set(this.heroPos.x, y, this.heroPos.z);
+    }
+    // the held vehicle rides above the head (or sits at the mouth while gnawing)
+    const hd = this.camp.held;
+    if (hd) {
+      const s = form.height;
+      const chew = hero.chew > 0.05;
+      const fx = Math.sin(hero.yaw);
+      const fz = Math.cos(hero.yaw);
+      const up = chew ? s * 0.62 : s * (1.08 + Math.sin(this.now * 6) * 0.03);
+      const fwd = chew ? s * 0.42 : 0;
+      hd.obj.position.set(this.heroPos.x + fx * fwd, hero.root.position.y + up, this.heroPos.z + fz * fwd);
+      hd.obj.rotation.set(0, hero.yaw + Math.PI / 2 + (chew ? Math.sin(this.now * 30) * 0.15 : 0), 0);
+    }
+    if (hero.attackLands()) this.heroStrike();
     this.camp.tooBigT = Math.max(0, this.camp.tooBigT - dt);
-    this.hero.update(dt);
+    hero.update(dt);
+    this.updateThrows(dt);
+    this.updateSeeds(dt);
+    this.updateDefense(dt);
 
     // glowing goal markers
     let mi = 0;
@@ -3548,22 +4021,66 @@ export class GameSystem extends createSystem({
     if (this.cui.allDone(L.goal, this.camp.progress)) this.campaignEnd(true, 'CLEAR');
   }
 
-  /** the punch/kick connects: buildings, cars, tanks - and careless hits on people */
+  /** jumping onto a roof hard counts as a hit on that building */
+  private roofSlam() {
+    const e = this.buildingUnder(this.heroPos.x, this.heroPos.z);
+    if (!e) return;
+    this.damageBuilding(e, this.c.copy(this.heroPos).setY(this.hero.root.position.y), 'BUTT SLAM ');
+    this.shakeT = 0.3;
+    this.shakeAmp = this.settings.values.shake ? 0.0018 : 0;
+  }
+
+  /** one hit on a building: wobble, or down it when its hits run out */
+  private damageBuilding(e: Entity, at: Vector3, label: string) {
+    const form = this.hero.form;
+    const o = e.object3D!;
+    const h = e.getValue(Building, 'height') ?? 0.05;
+    if (h > form.power * (this.camp.powerT > 0 ? 1.4 : 1)) {
+      this.wobble(e, o, 0.025, 0);
+      this.fx.spark(at, 6, 0.2, 0xffffff);
+      this.sfx.metal();
+      if (this.camp.tooBigT <= 0) {
+        this.camp.tooBigT = 1.2;
+        this.fx.popup(this.a.copy(at).setY(h * 0.6 + 0.02), 'TOO BIG! GROW STRONGER', '#ff8a5a');
+      }
+      return;
+    }
+    const need = this.camp.powerT > 0 ? 1 : Math.max(1, Math.ceil((3 * h) / form.power));
+    const left = Math.min(need, this.camp.hits.get(e.index) ?? need) - 1;
+    this.camp.hits.set(e.index, left);
+    this.sfx.punch();
+    this.hitStop(0.05);
+    this.shakeT = 0.18;
+    this.shakeAmp = this.settings.values.shake ? 0.0012 : 0;
+    if (left <= 0) {
+      this.smash(e, at, 2.2, 1, label);
+      this.hitStop(0.09);
+    } else {
+      this.wobble(e, o, 0.06, 0);
+      this.fx.puff(at, 0.01, 5);
+      this.fx.spark(at, 8, 0.25);
+      this.fx.popup(this.a.copy(at).setY(h + 0.015), `${left} MORE`, '#ffffff');
+    }
+  }
+
+  /** the punch connects: buildings, cars, tanks - and careless hits on people */
   private heroStrike() {
     const form = this.hero.form;
+    const y0 = this.hero.root.position.y;
     const reach = this.hero.radius + form.height * 0.32;
     const fx = Math.sin(this.hero.yaw);
     const fz = Math.cos(this.hero.yaw);
     const ix = this.heroPos.x + fx * reach;
     const iz = this.heroPos.z + fz * reach;
     const hitR = form.height * 0.28;
-    const imp = this.c.set(ix, form.height * 0.45, iz);
+    const imp = this.c.set(ix, y0 + form.height * 0.45, iz);
     let best: Entity | null = null;
     let bestD = 1e9;
     for (const e of this.queries.buildings.entities) {
       if (!e.getValue(Building, 'alive')) continue;
       const o = e.object3D;
       if (!o) continue;
+      if ((e.getValue(Building, 'height') ?? 0) < y0 + form.height * 0.15) continue; // below our fists
       const half = (e.getValue(Building, 'width') ?? 0.03) / 2;
       const cx = Math.max(o.position.x - half, Math.min(ix, o.position.x + half));
       const cz = Math.max(o.position.z - half, Math.min(iz, o.position.z + half));
@@ -3576,53 +4093,28 @@ export class GameSystem extends createSystem({
     let hitSomething = false;
     if (best) {
       hitSomething = true;
-      const o = best.object3D!;
-      const h = best.getValue(Building, 'height') ?? 0.05;
-      if (h > form.power) {
-        this.wobble(best, o, 0.025, 0);
-        this.fx.spark(imp, 6, 0.2, 0xffffff);
-        this.sfx.metal();
-        if (this.camp.tooBigT <= 0) {
-          this.camp.tooBigT = 1.2;
-          this.fx.popup(this.a.copy(imp).setY(h * 0.6 + 0.02), 'TOO BIG! GROW STRONGER', '#ff8a5a');
-        }
-      } else {
-        const need = Math.max(1, Math.ceil((3 * h) / form.power));
-        const left = (this.camp.hits.get(best.index) ?? need) - 1;
-        this.camp.hits.set(best.index, left);
-        this.sfx.punch();
-        this.hitStop(0.05);
-        this.shakeT = 0.18;
-        this.shakeAmp = this.settings.values.shake ? 0.0012 : 0;
-        if (left <= 0) {
-          this.smash(best, imp, 2.2, 1, this.hero.attackKind === 'kick' ? 'KICK ' : 'PUNCH ');
-          this.hitStop(0.09);
-        } else {
-          this.wobble(best, o, 0.06, 0);
-          this.fx.puff(imp, 0.01, 5);
-          this.fx.spark(imp, 8, 0.25);
-          this.fx.popup(this.a.copy(imp).setY(h + 0.015), `${left} MORE`, '#ffffff');
+      this.damageBuilding(best, imp, 'PUNCH ');
+    }
+    if (y0 < form.height * 0.5) {
+      for (const car of this.cars) {
+        if (car.state === 'drive' && Math.hypot(car.obj.position.x - ix, car.obj.position.z - iz) < hitR + 0.008) {
+          this.wreckCar(car, imp);
+          hitSomething = true;
         }
       }
-    }
-    for (const car of this.cars) {
-      if (car.state === 'drive' && Math.hypot(car.obj.position.x - ix, car.obj.position.z - iz) < hitR + 0.008) {
-        this.wreckCar(car, imp);
-        hitSomething = true;
+      for (const e of this.queries.tanks.entities) {
+        if (!e.getValue(Tank, 'alive') || e.getValue(Tank, 'held')) continue;
+        const o = e.object3D;
+        if (o && Math.hypot(o.position.x - ix, o.position.z - iz) < hitR + 0.014) {
+          this.killTank(e, 60, 'TANK ');
+          hitSomething = true;
+        }
+      }
+      for (const p of this.people) {
+        if (p.state !== 'down' && Math.hypot(p.obj.position.x - ix, p.obj.position.z - iz) < hitR * 0.8) this.hurtPerson(p, this.heroPos);
       }
     }
-    for (const e of this.queries.tanks.entities) {
-      if (!e.getValue(Tank, 'alive')) continue;
-      const o = e.object3D;
-      if (o && Math.hypot(o.position.x - ix, o.position.z - iz) < hitR + 0.014) {
-        this.killTank(e, 60, 'TANK ');
-        hitSomething = true;
-      }
-    }
-    for (const p of this.people) {
-      if (p.state !== 'down' && Math.hypot(p.obj.position.x - ix, p.obj.position.z - iz) < hitR * 0.8) this.hurtPerson(p, this.heroPos);
-    }
-    if (!hitSomething) this.fx.puff(imp.setY(0.002), 0.002, 2);
+    if (!hitSomething) this.fx.puff(imp.setY(y0 + 0.002), 0.002, 2);
   }
 
   /** board, level cards, result + zoom buttons: placement, drawing and pokes */
@@ -3685,6 +4177,9 @@ export class GameSystem extends createSystem({
         newForm: this.camp.newForm,
         countdown: this.countdown,
         best: this.csave.stars[this.camp.level],
+        seeds: this.camp.seeds,
+        god: this.camp.godT,
+        holding: !!this.camp.held,
       };
       this.cui.drawBoard(st);
     }

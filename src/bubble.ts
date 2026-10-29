@@ -28,6 +28,8 @@ export class Bubble {
   readonly center = new Vector3();
   /** world-space radius; 0 = no clipping */
   readonly radius = { value: 0 };
+  /** how visible the city stays far from the hero (0..1) */
+  readonly minAlpha = { value: 0.28 };
   private uCenter = { value: this.center };
   private patched = new WeakSet<Material>();
   readonly rim = new Group();
@@ -47,7 +49,7 @@ export class Bubble {
     this.edge = new Mesh(new RingGeometry(0.985, 1.012, 128), this.edgeMat);
     this.edge.rotation.x = -Math.PI / 2;
     this.edge.position.y = 0.0006;
-    this.rim.add(this.wall, this.edge);
+    this.rim.add(this.edge);
     this.rim.visible = false;
   }
 
@@ -66,11 +68,13 @@ export class Bubble {
     const prev = mat.onBeforeCompile;
     const uC = this.uCenter;
     const uR = this.radius;
+    const uM = this.minAlpha;
     mat.onBeforeCompile = (shader: ShaderLike, renderer: unknown) => {
       (prev as (s: ShaderLike, r: unknown) => void).call(mat, shader, renderer);
       if (!shader.vertexShader.includes('#include <project_vertex>')) return;
       shader.uniforms.fkC = uC;
       shader.uniforms.fkR = uR;
+      shader.uniforms.fkMin = uM;
       shader.vertexShader = shader.vertexShader
         .replace('void main() {', 'varying vec3 vFkW;\nvoid main() {')
         .replace(
@@ -91,11 +95,19 @@ export class Bubble {
         'void main() {',
         `uniform vec3 fkC;
         uniform float fkR;
+        uniform float fkMin;
         varying vec3 vFkW;
         void main() {
           if ( fkR > 0.0 ) {
-            vec2 fkD = vFkW.xz - fkC.xz;
-            if ( dot( fkD, fkD ) > fkR * fkR ) discard;
+            // outside the focus circle the city fades to a see-through ghost (ordered dither: no sorting needed)
+            float fkD = length( vFkW.xz - fkC.xz );
+            float fkA = mix( 1.0, fkMin, smoothstep( fkR * 0.85, fkR * 1.35, fkD ) );
+            vec2 fkP = mod( floor( gl_FragCoord.xy ), 4.0 );
+            float fkB = ( fkP.x == 0.0 ? ( fkP.y == 0.0 ? 0.0 : fkP.y == 1.0 ? 12.0 : fkP.y == 2.0 ? 3.0 : 15.0 )
+                       : fkP.x == 1.0 ? ( fkP.y == 0.0 ? 8.0 : fkP.y == 1.0 ? 4.0 : fkP.y == 2.0 ? 11.0 : 7.0 )
+                       : fkP.x == 2.0 ? ( fkP.y == 0.0 ? 2.0 : fkP.y == 1.0 ? 14.0 : fkP.y == 2.0 ? 1.0 : 13.0 )
+                       : ( fkP.y == 0.0 ? 10.0 : fkP.y == 1.0 ? 6.0 : fkP.y == 2.0 ? 9.0 : 5.0 ) ) / 16.0 + 0.03;
+            if ( fkB > fkA ) discard;
           }`,
       );
     };

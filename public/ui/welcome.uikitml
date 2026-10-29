@@ -81,15 +81,15 @@
     <div class="heading">FINGER KAIJU</div>
     <Divider></Divider>
     <div class="sub-heading">
-      Your desk becomes a tiny Tokyo. Walk its streets as a giant, smash the goals and win 3 stars per level: finish, be fast, hurt nobody. Grow from human to gorilla, robot, dinosaur and kaiju.
+      Your desk becomes a tiny Tokyo and you are a giant, chubby hamster. Smash the goals, gnaw and throw cars, eat seeds and win 3 stars per level: finish, be fast, hurt nobody. A rare golden seed gives 15 s of GOD MODE.
     </div>
     <div class="controls-title">CAMPAIGN (QUEST)</div>
-    <div class="control">Left stick: walk  |  A / trigger: punch  |  B: jump</div>
-    <div class="control">Right stick or + / - buttons: zoom in and out</div>
+    <div class="control">Left stick walk  |  A punch / throw  |  B jump on roofs</div>
+    <div class="control">X grab a car, hold X to gnaw  |  right stick: zoom</div>
     <div class="control">Hands: pinch the ground to walk, pinch a building to smash it</div>
     <div class="control">Grip + point at any surface: move the city there</div>
     <div class="controls-title">DESKTOP</div>
-    <div class="control">WASD walk, Shift run, J punch, K kick, Space jump, +/- zoom</div>
+    <div class="control">WASD walk, Shift run, J punch, E grab (hold = gnaw), Space jump, +/- zoom</div>
   </div>
   <Button id="xr-button" class="button">
     <ButtonIcon>

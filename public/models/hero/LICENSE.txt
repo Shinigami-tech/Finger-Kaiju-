@@ -1,4 +1,2 @@
-Hero characters (all CC0 1.0 / public domain):
-- human.glb: Kenney "Mini Characters" (kenney.nl), CC0.
-- gorilla.glb (Yeti, recoloured in-game), dino.glb: Quaternius "Ultimate Monsters" (quaternius.com), CC0.
-- robot.glb: "RobotExpressive" by Tomas Laulhe (Quaternius), modified by Don McCurdy, CC0 (three.js examples).
+hamster.glb: generated for Finger Kaiju from the team's own hamster character sheet
+(image-to-3D with Tripo H3.1 via Higgsfield), textures downscaled to 1024 px.
