@@ -153,19 +153,19 @@ export class Hero {
           '#include <begin_vertex>',
           `#include <begin_vertex>
           {
-            // mesh space: centred, height hH, facing -Z
+            // mesh space: centred, height hH, facing +X (sideways = Z)
             float yn = clamp( transformed.y / hH + 0.5, 0.0, 1.0 );
             // the bottom: low and towards the back wobbles opposite to the step
-            float butt = smoothstep( 0.55, 0.0, yn ) * smoothstep( -0.1 * hH, 0.35 * hH, transformed.z );
+            float butt = smoothstep( 0.55, 0.0, yn ) * smoothstep( 0.1 * hH, -0.35 * hH, transformed.x );
             float jig = sin( hT * 15.0 ) * hWalk + sin( hT * 23.0 + 1.3 ) * 0.25 * hWalk;
-            transformed.x += butt * jig * 0.09 * hH;
+            transformed.z += butt * jig * 0.09 * hH;
             transformed.y += butt * abs( sin( hT * 15.0 ) ) * hWalk * 0.03 * hH;
-            transformed.z += butt * hWalk * 0.03 * hH * ( 0.5 + 0.5 * sin( hT * 30.0 ) );
+            transformed.x -= butt * hWalk * 0.03 * hH * ( 0.5 + 0.5 * sin( hT * 30.0 ) );
             // nibbling: the head bobs fast and the cheeks puff
-            float head = smoothstep( 0.55, 0.95, yn ) * smoothstep( 0.1 * hH, -0.25 * hH, transformed.z );
+            float head = smoothstep( 0.55, 0.95, yn ) * smoothstep( -0.1 * hH, 0.25 * hH, transformed.x );
             transformed.y -= head * hChew * 0.04 * hH * ( 0.5 + 0.5 * sin( hT * 38.0 ) );
-            float cheek = head * smoothstep( 0.05 * hH, 0.3 * hH, abs( transformed.x ) );
-            transformed.x *= 1.0 + cheek * hChew * 0.12 * ( 0.6 + 0.4 * sin( hT * 38.0 ) );
+            float cheek = head * smoothstep( 0.05 * hH, 0.3 * hH, abs( transformed.z ) );
+            transformed.z *= 1.0 + cheek * hChew * 0.12 * ( 0.6 + 0.4 * sin( hT * 38.0 ) );
           }`,
         );
     };
@@ -189,7 +189,7 @@ export class Hero {
     m.position.set(-this.c.x * k, -this.box.min.y * k, -this.c.z * k);
     // the generated mesh looks down -Z; turn it to face +Z like everything else
     const inner = new Group();
-    inner.rotation.y = Math.PI;
+    inner.rotation.y = -Math.PI / 2; // the generated mesh looks down +X
     inner.add(m);
     wrap.add(inner);
     this.mats = [];
@@ -205,6 +205,8 @@ export class Hero {
       const src = mesh.material as Material;
       const mat = (src as MeshStandardMaterial).clone();
       if (tint) mat.color.multiply(tint);
+      // the fur is very light: tone it down a little so it doesn't blow out in the sun
+      mat.color.multiplyScalar(0.82);
       mat.emissive = new Color(form.id === 'kaiju' ? 0x5a1a7a : 0xff2020);
       mat.emissiveIntensity = form.id === 'kaiju' ? 0.35 : 0;
       mat.metalness = 0;

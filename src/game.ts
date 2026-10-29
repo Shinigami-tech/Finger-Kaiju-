@@ -69,6 +69,7 @@ import {
 } from './kit-city.js';
 import { MonsterHands } from './monster-hands.js';
 import { Bubble } from './bubble.js';
+import { HamsterPaws } from './paws.js';
 import { BoardState, CampaignSave, CampaignUi, LEVELS, UiPick } from './campaign.js';
 import { formForLevel, Hero } from './hero.js';
 import { Ruins } from './ruins.js';
@@ -242,6 +243,7 @@ export class GameSystem extends createSystem({
   /* ---- campaign ---- */
   private hero!: Hero;
   private bubble = new Bubble();
+  private paws = new HamsterPaws();
   private cui = new CampaignUi();
   private csave = new CampaignSave();
   private sun!: DirectionalLight;
@@ -451,6 +453,7 @@ export class GameSystem extends createSystem({
     this.hero = new Hero((id) => AssetManager.loadGLTFById(id));
     this.city.add(this.hero.root);
     this.world.createTransformEntity(this.bubble.rim);
+    this.world.createTransformEntity(this.paws.root);
     const cuiEntity = this.world.createTransformEntity(this.cui.root);
     this.cui.buttons.forEach((b, k) => {
       const be = this.world.createTransformEntity(b.plane.mesh, { parent: cuiEntity });
@@ -1862,6 +1865,16 @@ export class GameSystem extends createSystem({
     const immersive = this.world.visibilityState.peek() !== VisibilityState.NonImmersive;
 
     if (!this.fakeHands) this.hands.update(this.world.renderer, this.player, dt);
+    // god mode with Quest controllers: each controller becomes a hamster paw (squeeze = fist, trigger = pinch)
+    if (this.camp.godT > 0 && !this.fakeHands) {
+      for (const side of SIDES) {
+        const pad = this.input.gamepads[side];
+        if (!pad || this.hands.hands[side].tracked) continue;
+        const grip = this.player.gripSpaces[side];
+        if (!grip) continue;
+        this.hands.fromController(side, grip, pad.getButtonValue(InputComponent.Squeeze), pad.getSelecting(), dt);
+      }
+    }
     this.player.head.getWorldPosition(this.head);
 
     if (!immersive) {
@@ -2057,7 +2070,9 @@ export class GameSystem extends createSystem({
     }
     this.hurtT = Math.max(0, this.hurtT - dt);
     this.tipMat.color.set(this.hurtT > 0 ? 0xff4040 : this.zoom ? 0x6fe08a : 0xffe066);
+    this.monster.root.visible = this.settings.values.claws && this.camp.phase === 'off';
     this.monster.update([this.hands.hands.left, this.hands.hands.right], this.placed, this.city, HALF, this.hurtT > 0 ? 1 : this.zoom ? 2 : 0);
+    this.paws.update([this.hands.hands.left, this.hands.hands.right], this.camp.godT > 0 && this.camp.phase === 'play');
     this.updateNudges();
     if (this.coach.mesh.visible && this.camp.phase !== 'off') {
       this.qYaw.setFromAxisAngle(this.b.set(0, 1, 0), this.anchorYaw);
