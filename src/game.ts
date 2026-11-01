@@ -75,7 +75,7 @@ import {
 import { MonsterHands } from './monster-hands.js';
 import { Bubble } from './bubble.js';
 import { HamsterPaws } from './paws.js';
-import { BoardState, CampaignSave, CampaignUi, CITIES, LEVELS, PER_CITY, UiPick } from './campaign.js';
+import { BoardState, CampaignSave, CampaignUi, CITIES, LEVELS, PER_CITY, PerkId, perkById, ThreatId, threatById, threatsFor, UiPick } from './campaign.js';
 import { formForLevel, Hero } from './hero.js';
 import { Ruins } from './ruins.js';
 import { kitAssetId } from './kit-manifest.js';
@@ -314,7 +314,9 @@ export class GameSystem extends createSystem({
     return g;
   }
   private camp = {
-    phase: 'off' as 'off' | 'select' | 'intro' | 'play' | 'won' | 'lost',
+    phase: 'off' as 'off' | 'select' | 'draft' | 'intro' | 'play' | 'won' | 'lost',
+    /** what the army brings this level (see THREATS) */
+    threats: [] as ThreatId[],
     level: 0,
     hurt: 0,
     stars: 0,
@@ -914,6 +916,22 @@ export class GameSystem extends createSystem({
     }
   }
 
+  private beginCountdown() {
+    this.mode = 'playing';
+    this.countdown = 3.4;
+    if (this.game === 'campaign') this.camp.phase = 'intro';
+    this.sfx.combo(1);
+    this.showCoach();
+  }
+
+  /** active perk / level threat checks used all over the hero and army code */
+  private perk(id: PerkId) {
+    return this.game === 'campaign' && this.camp.phase !== 'off' && this.csave.has(id);
+  }
+  private threat(id: ThreatId) {
+    return this.game === 'campaign' && this.camp.threats.includes(id);
+  }
+
   /** called when the 3-2-1 countdown finishes */
   private beginGame() {
     this.startPlaying();
@@ -922,6 +940,7 @@ export class GameSystem extends createSystem({
       this.ticker.push(`${LEVELS[this.camp.level].city}: ${LEVELS[this.camp.level].story.toUpperCase()}`, true);
     }
     this.time = this.modeTime();
+    if (this.perk('clock')) this.time += 30;
     if (this.game === 'heli') this.spawnHeli(true, 1);
     if (this.game === 'missions') {
       this.lives = 3;
@@ -2013,10 +2032,16 @@ export class GameSystem extends createSystem({
     if (this.pendingStart && !this.rebuild && this.ready && (this.game !== 'campaign' || this.hero.ready)) {
       this.pendingStart = false;
       if (this.game === 'campaign') this.campaignSetup();
-      this.mode = 'playing';
-      this.countdown = 3.4;
-      this.sfx.combo(1);
-      this.showCoach();
+      const L = LEVELS[this.camp.level];
+      if (this.game === 'campaign' && L.n >= 2) {
+        // perk draft: see what the army brings, then pick 1 of 3 perks
+        this.camp.phase = 'draft';
+        this.cui.perkOffer = this.csave.offerPerks(L.n);
+        this.cui.drawPerkCards(this.csave, this.camp.threats);
+        this.sfx.combo(3);
+        const intel = this.camp.threats.map((t) => threatById(t).title).join(' + ');
+        this.ticker.push(intel ? `ENEMY INTEL: ${intel}. PICK A PERK!` : 'PICK A PERK FOR THIS LEVEL!', true);
+      } else this.beginCountdown();
     }
     if (this.mode === 'playing' && this.countdown > 0) {
       const before = Math.ceil(this.countdown - 0.4);
@@ -3039,6 +3064,20 @@ export class GameSystem extends createSystem({
       this.toggleHelp();
       return;
     }
+    if (p.kind === 'card' && this.camp.phase === 'draft') {
+      const c = this.cui.perkOffer[p.i];
+      if (!c) return;
+      this.csave.takePerk(c.id);
+      this.cui.perkOffer = [];
+      this.sfx.roar(0.5);
+      this.sfx.combo(6);
+      this.fx.popup(this.c.copy(this.heroPos).setY(0.08), `${c.title}!`, c.color);
+      this.fx.ring(this.heroPos, 0.08, Number.parseInt(c.color.slice(1), 16), 0.6);
+      this.ticker.push(`PERK: ${c.title} - ${c.lines.join(' ')} (${c.levels} level${c.levels > 1 ? 's' : ''})`, true);
+      if (c.id === 'regen') this.hp = this.hpMax;
+      this.beginCountdown();
+      return;
+    }
     if (p.kind === 'card') {
       const c = this.cui.offered[p.i];
       if (!c || this.camp.phase !== 'won') return;
@@ -3092,8 +3131,9 @@ export class GameSystem extends createSystem({
     this.camp.goEntity = null;
     this.camp.goActor = null;
     this.camp.carry = null;
+    this.camp.threats = threatsFor(L.n);
     this.camp.tankT = 3;
-    this.camp.heliT = 10;
+    this.camp.heliT = this.threat('heli') ? 4 : 10;
     this.camp.held = null;
     this.camp.throws.length = 0;
     this.camp.seeds = 0;
@@ -3184,6 +3224,7 @@ export class GameSystem extends createSystem({
     const wasLocked = this.camp.level + 1 < LEVELS.length && !this.csave.unlocked(this.camp.level + 1);
     const firstClear = this.csave.stars[this.camp.level] === 0;
     if (win) this.csave.record(this.camp.level, stars, used);
+    if (win) this.csave.usePerks();
     this.cui.offered = win && firstClear ? this.csave.offer(L.n) : [];
     this.cui.drawCards(this.csave);
     this.camp.newForm = '';
@@ -3788,14 +3829,14 @@ export class GameSystem extends createSystem({
     const form = this.hero.form;
     // more officers in later levels
     if (play && L.n >= 2 && this.camp.godT <= 0) {
-      const max = Math.min(this.cops.length, 1 + Math.floor(L.n / 2));
+      const max = Math.min(this.cops.length, 1 + Math.floor(L.n / 2) + (this.threat('swat') ? 2 : 0));
       let alive = 0;
       for (const c of this.cops) if (c.state !== 'off') alive++;
       this.camp.copT -= dt;
       if (alive < max && this.camp.copT <= 0) {
         const c = this.cops.find((x) => x.state === 'off');
         if (c) {
-          this.camp.copT = 7 - Math.min(4, L.n * 0.3);
+          this.camp.copT = (7 - Math.min(4, L.n * 0.3)) * (this.threat('swat') ? 0.6 : 1) * (this.perk('sneaky') ? 1.6 : 1);
           // run in from the ring road, away from the hamster
           for (let k = 0; k < 12; k++) {
             this.ringPos(Math.random() * 4, c.obj.position);
@@ -3858,7 +3899,7 @@ export class GameSystem extends createSystem({
       }
       c.cd -= dt;
       if (c.cd <= 0 && d < 0.16 && this.camp.godT <= 0) {
-        c.cd = (1.6 + Math.random() * 0.8) / (1 + 0.04 * L.n);
+        c.cd = ((1.6 + Math.random() * 0.8) / (1 + 0.04 * L.n)) * (this.perk('sneaky') ? 2 : 1);
         this.fire(this.a.copy(c.obj.position).setY(0.014), this.b.copy(this.heroPos).setY(this.hero.root.position.y + form.height * 0.5), 0.3);
       }
       // brave ones try to tackle the hamster: it freezes for a moment
@@ -3980,7 +4021,7 @@ export class GameSystem extends createSystem({
 
   private tryGrabVehicle() {
     if (this.camp.held || this.hero.root.position.y > this.hero.form.height * 0.5) return false;
-    const g = this.grabbable(this.hero.radius + this.hero.form.height * 0.45);
+    const g = this.grabbable((this.hero.radius + this.hero.form.height * 0.45) * (this.perk('magnet') ? 1.6 : 1));
     if (!g) return false;
     if (g.car) g.car.state = 'held';
     if (g.tank) g.tank.setValue(Tank, 'held', true);
@@ -4034,7 +4075,7 @@ export class GameSystem extends createSystem({
         }
       }
       const hl = this.heli;
-      if (!hit && hl && hl.state === 'fly' && hl.obj.position.distanceTo(o.position) < 0.03 + form.height * 0.3) hit = 'heli';
+      if (!hit && hl && hl.state === 'fly' && hl.obj.position.distanceTo(o.position) < (0.03 + form.height * 0.3) * (this.perk('magnet') ? 1.6 : 1)) hit = 'heli';
       if (!hit) {
         for (const e of this.queries.tanks.entities) {
           const to = e.object3D;
@@ -4077,7 +4118,7 @@ export class GameSystem extends createSystem({
   /** sunflower seeds: snacks on streets and roofs (+time, +health, cheeks full = super punch) */
   private spawnSeeds() {
     const L = LEVELS[this.camp.level];
-    const n = Math.min(this.seeds.length, 10 + L.n);
+    const n = Math.min(this.seeds.length, Math.round((10 + L.n) * (this.threat('famine') ? 0.5 : 1)));
     const roofs = [...this.queries.buildings.entities].filter((e) => e.getValue(Building, 'alive') && (e.getValue(Building, 'height') ?? 1) < this.hero.form.height * 1.5);
     for (let i = 0; i < this.seeds.length; i++) {
       const sd = this.seeds[i];
@@ -4121,10 +4162,11 @@ export class GameSystem extends createSystem({
       sd.mesh.visible = false;
       this.camp.seeds++;
       const ck = this.csave.up.cheeks;
-      this.time += 3 + 2 * ck;
-      this.hp = Math.min(this.hpMax, this.hp + 15 + 8 * ck);
+      const fm = this.perk('feast') ? 2 : 1;
+      this.time += (3 + 2 * ck) * fm;
+      this.hp = Math.min(this.hpMax, this.hp + (15 + 8 * ck) * fm);
       this.c.copy(sd.mesh.position).setY(sd.pos.y + 0.03);
-      this.fx.popup(this.c, `+${3 + 2 * ck}s  +${15 + 8 * ck} HP`, '#ffe9a6');
+      this.fx.popup(this.c, `+${(3 + 2 * ck) * fm}s  +${(15 + 8 * ck) * fm} HP`, '#ffe9a6');
       this.fx.spark(this.c, 8, 0.2, 0xffe066);
       this.sfx.pop();
       this.sfx.combo(2 + (this.camp.seeds % 5));
@@ -4187,6 +4229,7 @@ export class GameSystem extends createSystem({
   private updateDefense(dt: number) {
     const L = LEVELS[this.camp.level];
     if (this.camp.phase !== 'play' || !this.canScore() || this.camp.godT > 0) return;
+    if (this.perk('regen')) this.hp = Math.min(this.hpMax, this.hp + 3 * dt);
     const tgt = this.localTips[0];
     if (L.n >= 2) {
       for (const car of this.cars) {
@@ -4195,7 +4238,7 @@ export class GameSystem extends createSystem({
         const d = Math.hypot(car.obj.position.x - tgt.x, car.obj.position.z - tgt.z);
         if (cd <= 0 && d < 0.24) {
           this.fire(this.a.copy(car.obj.position).setY(0.012), tgt, 0.2);
-          cd = 2.4 + Math.random() * 1.6;
+          cd = (2.4 + Math.random() * 1.6) * (this.perk('sneaky') ? 2 : 1) * (this.threat('swat') ? 0.75 : 1);
           if (this.once('police')) this.ticker.push('POLICE OPEN FIRE ON GIANT HAMSTER', true);
         }
         this.policeCd.set(car, cd);
@@ -4203,10 +4246,10 @@ export class GameSystem extends createSystem({
     }
     // the attack helicopter joins from level 4
     const h = this.heli;
-    if (L.n >= 4 && h && h.state === 'off') {
+    if ((L.n >= 4 || this.threat('heli')) && h && h.state === 'off') {
       this.camp.heliT -= dt;
       if (this.camp.heliT <= 0) {
-        this.camp.heliT = 25;
+        this.camp.heliT = this.threat('heli') ? 11 : 25;
         h.evasive = false;
         h.speed = 1;
         h.state = 'fly';
@@ -4374,7 +4417,7 @@ export class GameSystem extends createSystem({
       }
       const chewing = !!this.camp.held && (grabHeld || this.camp.autoChew) && !grab;
       if (mag > 0 && !chewing) {
-        const sp = form.speed * (1 + 0.12 * this.csave.up.speed) * (run ? 1.9 : 1) * Math.max(0.35, mag) * (this.camp.held ? 0.8 : 1);
+        const sp = form.speed * (1 + 0.12 * this.csave.up.speed) * (this.perk('zoomies') ? 1.3 : 1) * (run ? 1.9 : 1) * Math.max(0.35, mag) * (this.camp.held ? 0.8 : 1);
         const ok = this.moveHero(mx * sp * dt, mz * sp * dt);
         const want = Math.atan2(mx, mz);
         hero.yaw += wrapAngle(want - hero.yaw) * Math.min(1, dt * 12);
@@ -4429,7 +4472,7 @@ export class GameSystem extends createSystem({
         if (grab && !this.tryGrabVehicle()) punch = true;
         if (punch) hero.attack('punch');
       }
-      const v = Math.sqrt(2 * form.height * 40 * form.height * 1.7 * (1 + 0.18 * this.csave.up.jump));
+      const v = Math.sqrt(2 * form.height * 40 * form.height * 1.7 * (1 + 0.18 * this.csave.up.jump) * (this.perk('rocket') ? 1.6 : 1));
       if (jump) {
         if (hero.jump(v)) {
           this.sfx.pop();
@@ -4520,13 +4563,14 @@ export class GameSystem extends createSystem({
 
     if (ph !== 'play' || !this.canScore()) return;
     // the army: keep a couple of tanks on the ring road until enough are destroyed
-    if (L.goal.tanks && this.camp.progress.tanks < L.goal.tanks) {
+    const column = this.threat('tanks');
+    if ((L.goal.tanks && this.camp.progress.tanks < L.goal.tanks) || column) {
       let alive = 0;
       for (const e of this.queries.tanks.entities) if (e.getValue(Tank, 'alive')) alive++;
       this.camp.tankT -= dt;
-      if (alive < 2 && this.camp.tankT <= 0) {
+      if (alive < (column ? 3 : 2) && this.camp.tankT <= 0) {
         this.spawnTank();
-        this.camp.tankT = 4;
+        this.camp.tankT = column ? 3 : 4;
         if (this.once('camp-tanks')) this.ticker.push('ARMY TANKS ROLL INTO TOKYO', true);
       }
     }
@@ -4546,7 +4590,7 @@ export class GameSystem extends createSystem({
   /** what one bullet / shell does to the hamster: the defense gets tougher every level */
   private heroHitDamage() {
     const n = LEVELS[this.camp.level]?.n ?? 1;
-    return this.diff.dmg * 0.75 * (1 + 0.05 * (n - 1));
+    return this.diff.dmg * 0.75 * (1 + 0.05 * (n - 1)) * (this.perk('armor') ? 0.65 : 1) * (this.threat('snipers') ? 1.4 : 1);
   }
 
   private get hpMax() {
@@ -4555,7 +4599,7 @@ export class GameSystem extends createSystem({
 
   private heroDamage() {
     const u = this.csave.up;
-    return Math.round((this.hero.form.power * 1000 / 3) * (1 + 0.25 * u.power) * (this.camp.powerT > 0 ? 3 : 1));
+    return Math.round((this.hero.form.power * 1000 / 3) * (1 + 0.25 * u.power) * (this.camp.powerT > 0 ? 3 : 1) * (this.perk('rage') ? 1.5 : 1) * (this.threat('concrete') ? 0.75 : 1));
   }
 
   /** one hit on a building: shows the damage dealt and the HP left, downs it at 0 */
@@ -4563,7 +4607,7 @@ export class GameSystem extends createSystem({
     const form = this.hero.form;
     const o = e.object3D!;
     const h = e.getValue(Building, 'height') ?? 0.05;
-    const reach = form.power * (1 + 0.1 * this.csave.up.power) * (this.camp.powerT > 0 ? 1.4 : 1);
+    const reach = form.power * (1 + 0.1 * this.csave.up.power) * (this.camp.powerT > 0 ? 1.4 : 1) * (this.perk('rage') ? 1.2 : 1);
     if (h > reach) {
       this.wobble(e, o, 0.025, 0);
       this.fx.spark(at, 6, 0.2, 0xffffff);
@@ -4655,7 +4699,9 @@ export class GameSystem extends createSystem({
     const on = ph !== 'off' && this.placed;
     const showCards = on && ph === 'select' && !this.rebuild;
     const showBoard = on && ph !== 'select';
-    const showCardsUp = on && ph === 'won' && this.camp.revealT > 1.2 && this.cui.offered.length > 0;
+    const draft = ph === 'draft';
+    const nCards = draft ? this.cui.perkOffer.length : this.cui.offered.length;
+    const showCardsUp = on && ((ph === 'won' && this.camp.revealT > 1.2 && this.cui.offered.length > 0) || (draft && nCards > 0));
     const showResult = on && (ph === 'won' || ph === 'lost') && this.camp.revealT > 1.2 && !showCardsUp;
     for (const b of this.cui.levelCards) b.plane.mesh.visible = showCards;
     for (const b of this.cui.pageButtons) b.plane.mesh.visible = showCards && b.enabled;
@@ -4663,7 +4709,7 @@ export class GameSystem extends createSystem({
     this.cui.board.mesh.visible = showBoard;
     for (const b of this.cui.resultButtons) b.plane.mesh.visible = showResult;
     for (const b of this.cui.zoomButtons) b.plane.mesh.visible = on && ph !== 'select';
-    this.cui.cards.forEach((b, i) => (b.plane.mesh.visible = showCardsUp && i < this.cui.offered.length));
+    this.cui.cards.forEach((b, i) => (b.plane.mesh.visible = showCardsUp && i < nCards));
     this.cui.helpButton.plane.mesh.visible = on;
     if (!on) return;
     this.qYaw.setFromAxisAngle(this.b.set(0, 1, 0), this.anchorYaw);
@@ -4690,7 +4736,7 @@ export class GameSystem extends createSystem({
     this.cui.zoomButtons.forEach((b, i) => place(b.plane.mesh, 0.37, 0.09 - i * 0.045, 0.12));
     if (ph === 'select') place(this.cui.helpButton.plane.mesh, 0.42, 0.2, 0.3);
     else place(this.cui.helpButton.plane.mesh, 0.37, 0.135, 0.12);
-    if (showCardsUp) this.cui.cards.forEach((b, i) => place(b.plane.mesh, (i - (this.cui.offered.length - 1) / 2) * 0.1, 0.12, 0.34, Math.sin(t * 2 + i) * 0.003));
+    if (showCardsUp) this.cui.cards.forEach((b, i) => place(b.plane.mesh, (i - (nCards - 1) / 2) * 0.1, draft ? 0.1 : 0.12, 0.34, Math.sin(t * 2 + i) * 0.003));
     // star reveal on the result card
     if (ph === 'won' || ph === 'lost') {
       this.camp.revealT += dt;
@@ -4706,7 +4752,9 @@ export class GameSystem extends createSystem({
     if (showBoard) {
       const st: BoardState = {
         level: LEVELS[this.camp.level],
-        phase: ph === 'won' || ph === 'lost' ? ph : ph === 'play' ? 'play' : 'intro',
+        phase: ph === 'won' || ph === 'lost' || ph === 'draft' ? ph : ph === 'play' ? 'play' : 'intro',
+        threats: this.camp.threats,
+        perks: this.csave.perks,
         time: this.time,
         progress: this.camp.progress,
         hurt: this.camp.hurt,
@@ -4728,7 +4776,9 @@ export class GameSystem extends createSystem({
     if (pick) this.onCampaignPick(pick);
     // desktop shortcuts
     const kb = this.input.keyboard;
-    if (ph === 'won' && this.cui.offered.length) {
+    if (draft && this.cui.perkOffer.length) {
+      for (let i = 0; i < 3; i++) if (kb.getKeyDown(`Digit${i + 1}`)) this.onCampaignPick({ kind: 'card', i });
+    } else if (ph === 'won' && this.cui.offered.length) {
       for (let i = 0; i < 3; i++) if (kb.getKeyDown(`Digit${i + 1}`)) this.onCampaignPick({ kind: 'card', i });
     } else if (ph === 'won' || ph === 'lost') {
       if (kb.getKeyDown('KeyR')) this.onCampaignPick({ kind: 'retry' });

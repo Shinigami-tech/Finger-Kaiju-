@@ -109,13 +109,84 @@ export const UPGRADES: UpgradeCard[] = [
   { id: 'pound', title: 'QUAKE POUND', lines: ['Double jump, then PUNCH', 'in the air: EARTHQUAKE!'], color: '#ff8a3a', icon: '\u{1F4A5}', max: 1, from: 4, needs: 'double' },
 ];
 
+/** short-lived perks: pick 1 of 3 before every level (from level 2); each lasts a few cleared levels */
+export type PerkId = 'armor' | 'rocket' | 'rage' | 'zoomies' | 'regen' | 'clock' | 'sneaky' | 'feast' | 'magnet';
+/** what the army brings to a level: shown before the perk pick, so the choice matters */
+export type ThreatId = 'heli' | 'tanks' | 'swat' | 'snipers' | 'famine' | 'concrete';
+export interface PerkCard {
+  id: PerkId;
+  title: string;
+  lines: string[];
+  color: string;
+  icon: string;
+  /** how many cleared levels it lasts */
+  levels: number;
+  /** threats this perk is good against (the card says "COUNTERS ...") */
+  counters: ThreatId[];
+}
+export const PERKS: PerkCard[] = [
+  { id: 'armor', title: 'IRON FUR', lines: ['-35% damage taken', 'from every attack'], color: '#9fb4c8', icon: '\u{1F6E1}️', levels: 2, counters: ['snipers', 'tanks'] },
+  { id: 'rocket', title: 'ROCKET LEGS', lines: ['+60% jump height', 'leap over everything'], color: '#b55cff', icon: '\u{1F680}', levels: 3, counters: ['swat'] },
+  { id: 'rage', title: 'BERSERK', lines: ['+50% smash damage', 'topple bigger towers'], color: '#ff5a36', icon: '\u{1F525}', levels: 2, counters: ['concrete'] },
+  { id: 'zoomies', title: 'ZOOMIES', lines: ['+30% speed', 'outrun the army'], color: '#36b0ff', icon: '⚡', levels: 2, counters: ['heli', 'swat'] },
+  { id: 'regen', title: 'REGENERATION', lines: ['Heal 3 HP every', 'second, all level'], color: '#6fe08a', icon: '\u{1F49A}', levels: 2, counters: ['snipers', 'heli'] },
+  { id: 'clock', title: 'EXTRA TIME', lines: ['+30 seconds', 'on the clock'], color: '#ffcf3a', icon: '⏱️', levels: 1, counters: ['famine', 'concrete'] },
+  { id: 'sneaky', title: 'SNEAKY PAWS', lines: ['Police fire 50% less', 'and arrive later'], color: '#7a6cff', icon: '\u{1F977}', levels: 2, counters: ['swat', 'snipers'] },
+  { id: 'feast', title: 'SEED FEAST', lines: ['Seeds heal x2', 'and give x2 time'], color: '#ffb347', icon: '\u{1F33B}', levels: 2, counters: ['famine'] },
+  { id: 'magnet', title: 'CAR MAGNET', lines: ['Grab from further away,', 'throws hit a wider area'], color: '#ff6ad5', icon: '\u{1F9F2}', levels: 2, counters: ['heli', 'tanks'] },
+];
+export const perkById = (id: PerkId) => PERKS.find((p) => p.id === id)!;
+export interface ThreatCard {
+  id: ThreatId;
+  title: string;
+  line: string;
+  color: string;
+  icon: string;
+  from: number;
+}
+export const THREATS: ThreatCard[] = [
+  { id: 'swat', title: 'SWAT TEAM', line: 'more officers, faster', color: '#9ec8ff', icon: '\u{1F46E}', from: 2 },
+  { id: 'heli', title: 'GUNSHIP', line: 'helicopter early, returns fast', color: '#ff8a3a', icon: '\u{1F681}', from: 3 },
+  { id: 'snipers', title: 'SHARPSHOOTERS', line: 'bullets hit 40% harder', color: '#ff5a5a', icon: '\u{1F3AF}', from: 3 },
+  { id: 'tanks', title: 'TANK COLUMN', line: 'tanks roll in all level', color: '#c9b37a', icon: '\u{1F4A3}', from: 4 },
+  { id: 'famine', title: 'NO SNACKS', line: 'only half the seeds', color: '#d9a066', icon: '\u{1F6AB}', from: 5 },
+  { id: 'concrete', title: 'REINFORCED', line: 'buildings take 25% less damage', color: '#a0a0b0', icon: '\u{1F9F1}', from: 6 },
+];
+export const threatById = (id: ThreatId) => THREATS.find((t) => t.id === id)!;
+/** the same level always brings the same army (fair retries); more threats later on */
+export function threatsFor(n: number): ThreatId[] {
+  if (n < 2) return [];
+  const pool = THREATS.filter((t) => n >= t.from);
+  const count = n >= 20 ? 3 : n >= 9 ? 2 : 1;
+  let seed = n * 7919 + 13;
+  const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+  const out: ThreatId[] = [];
+  // big battles always bring their signature units
+  const L = LEVELS[n - 1];
+  if (L?.goal.tanks && pool.some((t) => t.id === 'tanks')) out.push('tanks');
+  if (/AIR|SIEGE|STAND|LEGEND/.test(L?.title ?? '') && pool.some((t) => t.id === 'heli')) out.push('heli');
+  let guard = 0;
+  while (out.length < count && guard++ < 50) {
+    const t = pool[Math.floor(rnd() * pool.length)].id;
+    if (!out.includes(t)) out.push(t);
+  }
+  return out.slice(0, Math.max(count, out.length));
+}
+export interface ActivePerk {
+  id: PerkId;
+  left: number;
+}
+export const MAX_PERKS = 3;
+
 export class CampaignSave {
   stars: number[] = LEVELS.map(() => 0);
   times: number[] = LEVELS.map(() => 0);
   up: Upgrades = { power: 0, fur: 0, speed: 0, jump: 0, cheeks: 0, double: 0, pound: 0 };
+  perks: ActivePerk[] = [];
   constructor() {
     try {
-      const v = JSON.parse(localStorage.getItem(STORE) ?? 'null') as { stars?: number[]; times?: number[]; up?: Partial<Upgrades> } | null;
+      const v = JSON.parse(localStorage.getItem(STORE) ?? 'null') as { stars?: number[]; times?: number[]; up?: Partial<Upgrades>; perks?: ActivePerk[] } | null;
+      if (Array.isArray(v?.perks)) this.perks = v.perks.filter((p) => PERKS.some((k) => k.id === p.id) && p.left > 0).slice(0, MAX_PERKS);
       if (v?.stars) v.stars.forEach((s, i) => i < this.stars.length && (this.stars[i] = s | 0));
       if (v?.times) v.times.forEach((s, i) => i < this.times.length && (this.times[i] = +s || 0));
       if (v?.up) for (const k of Object.keys(this.up) as UpgradeId[]) this.up[k] = Math.max(0, (v.up[k] ?? 0) | 0);
@@ -134,7 +205,7 @@ export class CampaignSave {
     this.stars[i] = Math.max(this.stars[i], stars);
     if (stars > 0 && (this.times[i] === 0 || time < this.times[i])) this.times[i] = time;
     try {
-      localStorage.setItem(STORE, JSON.stringify({ stars: this.stars, times: this.times, up: this.up }));
+      localStorage.setItem(STORE, JSON.stringify({ stars: this.stars, times: this.times, up: this.up, perks: this.perks }));
     } catch {
       /* storage unavailable */
     }
@@ -151,12 +222,45 @@ export class CampaignSave {
   take(id: UpgradeId) {
     this.up[id]++;
     try {
-      localStorage.setItem(STORE, JSON.stringify({ stars: this.stars, times: this.times, up: this.up }));
+      localStorage.setItem(STORE, JSON.stringify({ stars: this.stars, times: this.times, up: this.up, perks: this.perks }));
+    } catch {
+      /* storage unavailable */
+    }
+  }
+  /** is a perk active right now */
+  has(id: PerkId) {
+    return this.perks.some((p) => p.id === id);
+  }
+  /** 3 random perks for this level; at least one of them counters a threat it brings */
+  offerPerks(n: number): PerkCard[] {
+    const threats = threatsFor(n);
+    const pool = PERKS.filter((p) => !this.has(p.id)).sort(() => Math.random() - 0.5);
+    const counter = pool.find((p) => p.counters.some((c) => threats.includes(c)));
+    const out = counter ? [counter] : [];
+    for (const p of pool) if (out.length < 3 && !out.includes(p)) out.push(p);
+    return out.sort(() => Math.random() - 0.5);
+  }
+  takePerk(id: PerkId) {
+    const card = perkById(id);
+    if (this.perks.length >= MAX_PERKS) this.perks.sort((a, b) => a.left - b.left).shift();
+    this.perks.push({ id, left: card.levels });
+    this.persist();
+  }
+  /** a cleared level uses up one level of every active perk */
+  usePerks() {
+    for (const p of this.perks) p.left--;
+    this.perks = this.perks.filter((p) => p.left > 0);
+    this.persist();
+  }
+  private persist() {
+    try {
+      localStorage.setItem(STORE, JSON.stringify({ stars: this.stars, times: this.times, up: this.up, perks: this.perks }));
     } catch {
       /* storage unavailable */
     }
   }
   reset() {
+    this.perks = [];
     this.stars.fill(0);
     this.times.fill(0);
     for (const k of Object.keys(this.up) as UpgradeId[]) this.up[k] = 0;
@@ -232,7 +336,7 @@ class CanvasPlane {
   }
 }
 
-export type UiPick = { kind: 'card'; i: number } | { kind: 'help' } | { kind: 'page'; dir: 1 | -1 } | { kind: 'level'; i: number } | { kind: 'retry' } | { kind: 'next' } | { kind: 'levels' } | { kind: 'back' } | { kind: 'zoom'; dir: 1 | -1 };
+export type UiPick = { kind: 'card'; i: number } | { kind: 'perk'; i: number } | { kind: 'help' } | { kind: 'page'; dir: 1 | -1 } | { kind: 'level'; i: number } | { kind: 'retry' } | { kind: 'next' } | { kind: 'levels' } | { kind: 'back' } | { kind: 'zoom'; dir: 1 | -1 };
 
 export interface UiButton {
   plane: CanvasPlane;
@@ -243,7 +347,9 @@ export interface UiButton {
 
 export interface BoardState {
   level: LevelDef;
-  phase: 'intro' | 'play' | 'won' | 'lost';
+  phase: 'draft' | 'intro' | 'play' | 'won' | 'lost';
+  threats: ThreatId[];
+  perks: ActivePerk[];
   time: number;
   progress: Required<LevelGoal>;
   hurt: number;
@@ -274,6 +380,8 @@ export class CampaignUi {
   readonly helpButton: UiButton;
   readonly help: CanvasPlane;
   offered: UpgradeCard[] = [];
+  /** perk choices shown before a level */
+  perkOffer: PerkCard[] = [];
   readonly back: UiButton;
   private v = new Vector3();
   private cool = 0;
@@ -493,6 +601,73 @@ export class CampaignUi {
     });
   }
 
+  /** the 1-of-3 perk pick before a level: bright, readable, and says what it counters */
+  drawPerkCards(save: CampaignSave, threats: ThreatId[]) {
+    this.cards.forEach((b, k) => {
+      const c = this.perkOffer[k];
+      b.enabled = !!c;
+      const p = b.plane;
+      const g = p.g;
+      g.clearRect(0, 0, p.cw, p.ch);
+      if (!c) {
+        p.tex.needsUpdate = true;
+        return;
+      }
+      const grad = g.createLinearGradient(0, 0, 0, p.ch);
+      grad.addColorStop(0, '#1d2b4a');
+      grad.addColorStop(1, '#0c1222');
+      g.fillStyle = grad;
+      rr(g, 8, 8, p.cw - 16, p.ch - 16, 40);
+      g.fill();
+      g.lineWidth = 12;
+      g.strokeStyle = c.color;
+      g.stroke();
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      // key number for desktop players
+      g.fillStyle = 'rgba(255,255,255,0.16)';
+      g.beginPath();
+      g.arc(52, 52, 26, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = '#fff';
+      g.font = '900 30px system-ui, sans-serif';
+      g.fillText(String(k + 1), 52, 54);
+      const glow = g.createRadialGradient(p.cw / 2, 130, 10, p.cw / 2, 130, 110);
+      glow.addColorStop(0, c.color);
+      glow.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = glow;
+      g.fillRect(0, 20, p.cw, 220);
+      g.font = '104px system-ui, "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+      g.fillText(c.icon, p.cw / 2, 134);
+      g.fillStyle = '#fff';
+      g.font = '900 40px system-ui, "Arial Black", sans-serif';
+      g.fillText(c.title, p.cw / 2, 262);
+      g.font = '700 29px system-ui, sans-serif';
+      g.fillStyle = '#d6e2ff';
+      c.lines.forEach((l, i) => g.fillText(l, p.cw / 2, 316 + i * 38));
+      // duration pips
+      g.font = '800 26px system-ui, sans-serif';
+      g.fillStyle = '#ffcf3a';
+      g.fillText(`LASTS ${c.levels} LEVEL${c.levels > 1 ? 'S' : ''}`, p.cw / 2, 410);
+      for (let i = 0; i < c.levels; i++) {
+        g.beginPath();
+        g.arc(p.cw / 2 + (i - (c.levels - 1) / 2) * 30, 442, 9, 0, Math.PI * 2);
+        g.fill();
+      }
+      const hit = c.counters.filter((t) => threats.includes(t));
+      if (hit.length) {
+        g.fillStyle = '#3fbf5a';
+        rr(g, 40, 462, p.cw - 80, 40, 20);
+        g.fill();
+        g.fillStyle = '#fff';
+        g.font = '900 22px system-ui, sans-serif';
+        g.fillText(`COUNTERS ${threatById(hit[0]).title}`, p.cw / 2, 483);
+      }
+      p.tex.needsUpdate = true;
+    });
+    void save;
+  }
+
   /** the move list ("like the combo list in a fighting game") */
   drawHelp() {
     const p = this.help;
@@ -588,7 +763,7 @@ export class CampaignUi {
 
   /** the floating scoreboard */
   drawBoard(s: BoardState) {
-    const key = JSON.stringify([s.phase, s.level.n, Math.ceil(s.time), s.progress, s.hurt, Math.round(s.hp), s.hpMax, s.shown, s.reason, Math.ceil(s.countdown), s.newForm, s.seeds, Math.ceil(s.god), s.holding]);
+    const key = JSON.stringify([s.phase, s.threats, s.perks, s.level.n, Math.ceil(s.time), s.progress, s.hurt, Math.round(s.hp), s.hpMax, s.shown, s.reason, Math.ceil(s.countdown), s.newForm, s.seeds, Math.ceil(s.god), s.holding]);
     if (key === this.lastKey) return;
     this.lastKey = key;
     const p = this.board;
@@ -614,6 +789,65 @@ export class CampaignUi {
     g.font = '900 58px system-ui, "Arial Black", sans-serif';
     g.fillStyle = '#fff';
     g.fillText(L.title, W / 2, 112);
+    // active perks: small chips in the top-left corner (number = levels left)
+    if (s.perks.length && s.phase !== 'draft') {
+      g.textAlign = 'left';
+      s.perks.forEach((ap, k) => {
+        const c = perkById(ap.id);
+        const x = 34 + k * 92;
+        g.fillStyle = 'rgba(255,255,255,0.1)';
+        rr(g, x, 30, 84, 52, 26);
+        g.fill();
+        g.lineWidth = 3;
+        g.strokeStyle = c.color;
+        g.stroke();
+        g.font = '30px system-ui, "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+        g.fillText(c.icon, x + 10, 57);
+        g.font = '900 26px system-ui, sans-serif';
+        g.fillStyle = '#fff';
+        g.fillText(String(ap.left), x + 54, 58);
+      });
+      g.textAlign = 'center';
+    }
+    if (s.phase === 'draft') {
+      g.font = '900 32px system-ui, sans-serif';
+      g.fillStyle = '#ff8a8a';
+      g.fillText('ENEMY INTEL', W / 2, 172);
+      const th = s.threats.length ? s.threats : [];
+      if (!th.length) {
+        g.font = '700 30px system-ui, sans-serif';
+        g.fillStyle = '#d0caf5';
+        g.fillText('Just the local police. For now...', W / 2, 222);
+      }
+      th.forEach((id, k) => {
+        const t = threatById(id);
+        const y = 222 + k * 56;
+        g.fillStyle = 'rgba(255,90,90,0.12)';
+        rr(g, 110, y - 24, W - 220, 48, 24);
+        g.fill();
+        g.textAlign = 'left';
+        g.font = '32px system-ui, "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+        g.fillText(t.icon, 130, y + 2);
+        g.font = '900 30px system-ui, sans-serif';
+        g.fillStyle = t.color;
+        g.fillText(t.title, 182, y + 2);
+        const tw = g.measureText(t.title).width;
+        g.font = '700 26px system-ui, sans-serif';
+        g.fillStyle = '#e6e0ff';
+        g.fillText(`\u2014 ${t.line}`, 196 + tw, y + 2);
+        g.textAlign = 'center';
+      });
+      const yb = 222 + Math.max(1, th.length) * 56 + 26;
+      g.font = '800 28px system-ui, sans-serif';
+      g.fillStyle = '#a9a3d6';
+      const act = s.perks.map((ap) => `${perkById(ap.id).title} (${ap.left})`).join('  ·  ');
+      g.fillText(act ? `Active: ${act}` : 'No active perks yet', W / 2, yb);
+      g.font = '900 46px system-ui, "Arial Black", sans-serif';
+      g.fillStyle = '#ffcf3a';
+      g.fillText('PICK 1 PERK \u2193', W / 2, Math.min(H - 56, yb + 70));
+      p.tex.needsUpdate = true;
+      return;
+    }
 
     if (s.phase === 'intro' || s.phase === 'play') {
       const lines = goalLines(L.goal, s.phase === 'play' ? s.progress : null);
