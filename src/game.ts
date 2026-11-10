@@ -3393,7 +3393,7 @@ export class GameSystem extends createSystem({
       this.bubble.hero.copy(this.heroPos).setY(this.hero.root.position.y + this.hero.form.height * 0.55);
       this.city.localToWorld(this.bubble.hero);
       this.bubble.eye.copy(this.head);
-      this.bubble.cut.value = Math.max(0.05, this.hero.form.height * 3.2) * zv;
+      this.bubble.cut.value = this.hero.form.height * 1.6 * zv;
       this.bubble.ground.value = this.anchor.y + 0.004 * zv;
     } else this.bubble.cut.value = 0;
     this.bubble.update(dt, this.anchor.y, 0.035);

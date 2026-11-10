@@ -29,7 +29,8 @@ export class Bubble {
   /** world-space radius; 0 = no clipping */
   readonly radius = { value: 0 };
   /** how visible the city stays far from the hero (0..1) */
-  readonly minAlpha = { value: 0.28 };
+  /** clip radius multiplier: everything farther than radius * this from the hero is cut away */
+  readonly minAlpha = { value: 1.0 };
   private uCenter = { value: this.center };
   /** world-space eye (viewer) and hero chest point for the see-through cut */
   readonly eye = new Vector3();
@@ -57,7 +58,7 @@ export class Bubble {
     this.edge = new Mesh(new RingGeometry(0.985, 1.012, 128), this.edgeMat);
     this.edge.rotation.x = -Math.PI / 2;
     this.edge.position.y = 0.0006;
-    this.rim.add(this.edge);
+    this.rim.add(this.wall, this.edge);
     this.rim.visible = false;
   }
 
@@ -115,30 +116,15 @@ export class Bubble {
         varying vec3 vFkW;
         void main() {
           if ( fkCut > 0.0 && vFkW.y > fkGround ) {
-            // see-through tube from the viewer to the hero: anything standing in between turns to a ghost
+            // cut-away tube from the viewer to the hamster: whatever stands in between is simply not drawn
             vec3 fkD = fkHero - fkEye;
-            float fkT = clamp( dot( vFkW - fkEye, fkD ) / max( dot( fkD, fkD ), 1e-6 ), 0.0, 1.0 );
-            float fkDist = length( vFkW - ( fkEye + fkD * fkT ) );
-            float fkR = fkCut * ( 0.45 + 0.55 * fkT ); // a cone that widens towards the hero
-            float fkA = mix( 0.14, 1.0, smoothstep( fkR * 0.55, fkR, fkDist ) );
-            fkA = mix( 1.0, fkA, step( fkT, 0.93 ) );
-            vec2 fkQ = mod( floor( gl_FragCoord.xy ), 4.0 );
-            float fkB2 = ( fkQ.x == 0.0 ? ( fkQ.y == 0.0 ? 0.0 : fkQ.y == 1.0 ? 12.0 : fkQ.y == 2.0 ? 3.0 : 15.0 )
-                       : fkQ.x == 1.0 ? ( fkQ.y == 0.0 ? 8.0 : fkQ.y == 1.0 ? 4.0 : fkQ.y == 2.0 ? 11.0 : 7.0 )
-                       : fkQ.x == 2.0 ? ( fkQ.y == 0.0 ? 2.0 : fkQ.y == 1.0 ? 14.0 : fkQ.y == 2.0 ? 1.0 : 13.0 )
-                       : ( fkQ.y == 0.0 ? 10.0 : fkQ.y == 1.0 ? 6.0 : fkQ.y == 2.0 ? 9.0 : 5.0 ) ) / 16.0 + 0.03;
-            if ( fkB2 > fkA ) discard;
+            float fkT = dot( vFkW - fkEye, fkD ) / max( dot( fkD, fkD ), 1e-6 );
+            float fkDist = length( vFkW - ( fkEye + fkD * clamp( fkT, 0.0, 1.0 ) ) );
+            if ( fkT > 0.0 && fkT < 0.94 && fkDist < fkCut * ( 0.35 + 0.65 * fkT ) ) discard;
           }
           if ( fkR > 0.0 ) {
-            // outside the focus circle the city fades to a see-through ghost (ordered dither: no sorting needed)
-            float fkD = length( vFkW.xz - fkC.xz );
-            float fkA = mix( 1.0, fkMin, smoothstep( fkR * 0.85, fkR * 1.35, fkD ) );
-            vec2 fkP = mod( floor( gl_FragCoord.xy ), 4.0 );
-            float fkB = ( fkP.x == 0.0 ? ( fkP.y == 0.0 ? 0.0 : fkP.y == 1.0 ? 12.0 : fkP.y == 2.0 ? 3.0 : 15.0 )
-                       : fkP.x == 1.0 ? ( fkP.y == 0.0 ? 8.0 : fkP.y == 1.0 ? 4.0 : fkP.y == 2.0 ? 11.0 : 7.0 )
-                       : fkP.x == 2.0 ? ( fkP.y == 0.0 ? 2.0 : fkP.y == 1.0 ? 14.0 : fkP.y == 2.0 ? 1.0 : 13.0 )
-                       : ( fkP.y == 0.0 ? 10.0 : fkP.y == 1.0 ? 6.0 : fkP.y == 2.0 ? 9.0 : 5.0 ) ) / 16.0 + 0.03;
-            if ( fkB > fkA ) discard;
+            // outside the focus circle the city is sliced away (a clean diorama cut, no screen-door dither)
+            if ( length( vFkW.xz - fkC.xz ) > fkR * fkMin ) discard;
           }`,
       );
     };
