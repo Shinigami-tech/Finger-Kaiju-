@@ -742,7 +742,7 @@ export class CampaignUi {
           ['A while holding', 'Throw it'],
           ['Right stick', 'Zoom in / out'],
           ['Grip over the city', 'GRAB & drag the city'],
-          ['Grip + point away', 'Send the city there'],
+          ['Menus: L / R stick', 'Move | turn + resize city'],
         ],
       ],
       [

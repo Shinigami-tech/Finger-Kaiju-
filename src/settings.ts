@@ -5,7 +5,7 @@
  *    big [<] [>] buttons you press with your index fingertip.
  * Values persist in localStorage.
  */
-import { CanvasTexture, Group, Mesh, MeshBasicMaterial, PlaneGeometry, SRGBColorSpace, Vector3 } from '@iwsdk/core';
+import { CanvasTexture, Group, Mesh, MeshBasicMaterial, PlaneGeometry, Quaternion, RingGeometry, SRGBColorSpace, Vector3 } from '@iwsdk/core';
 import type { HandData } from './hands.js';
 
 export interface SettingValues {
@@ -242,6 +242,11 @@ export class SettingsBoard {
   private boardInside = [false, false];
   private v = new Vector3();
   private readonly size = { w: 0.3, h: (0.3 * H) / W };
+  /** controller-ray cursor on the board */
+  readonly cursor: Mesh;
+  private n = new Vector3();
+  private p = new Vector3();
+  private q = new Quaternion();
 
   constructor(private s: Settings) {
     this.root.name = 'SettingsBoard';
@@ -275,6 +280,13 @@ export class SettingsBoard {
     this.gear = new Mesh(new PlaneGeometry(0.04, 0.04), new MeshBasicMaterial({ map: gt, transparent: true, depthWrite: false }));
     this.gear.renderOrder = 6;
     this.root.add(this.gear);
+    this.cursor = new Mesh(
+      new RingGeometry(0.0035, 0.0055, 24),
+      new MeshBasicMaterial({ color: 0xffcf3a, transparent: true, depthWrite: false, depthTest: false }),
+    );
+    this.cursor.renderOrder = 8;
+    this.cursor.visible = false;
+    this.board.add(this.cursor);
     s.onChange(() => this.draw());
   }
 
@@ -335,6 +347,42 @@ export class SettingsBoard {
     this.buttons.push({ x, y, w, h, act });
   }
 
+  private press(px: number, py: number) {
+    const i = this.buttons.findIndex((b) => px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h);
+    if (i < 0) return;
+    this.hot = i;
+    this.buttons[i].act();
+    this.cool = 0.25;
+    this.draw();
+    setTimeout(() => {
+      this.hot = -1;
+      this.draw();
+    }, 160);
+  }
+
+  /**
+   * Point a controller at the board: shows a cursor where the ray hits, trigger presses the button
+   * under it. Call once per controller per frame; `first` hides the cursor before the first ray.
+   */
+  ray(origin: Vector3, dir: Vector3, click: boolean, first: boolean) {
+    if (first) this.cursor.visible = false;
+    if (!this.open) return false;
+    this.board.updateWorldMatrix(true, false);
+    this.board.getWorldQuaternion(this.q);
+    this.n.set(0, 0, 1).applyQuaternion(this.q);
+    const denom = dir.dot(this.n);
+    if (Math.abs(denom) < 1e-4) return false;
+    this.board.getWorldPosition(this.p);
+    const t = this.p.sub(origin).dot(this.n) / denom;
+    if (t <= 0 || t > 5) return false;
+    this.board.worldToLocal(this.v.copy(origin).addScaledVector(dir, t));
+    if (Math.abs(this.v.x) > this.size.w / 2 || Math.abs(this.v.y) > this.size.h / 2) return false;
+    this.cursor.visible = true;
+    this.cursor.position.set(this.v.x, this.v.y, 0.001);
+    if (click && this.cool === 0) this.press((this.v.x / this.size.w + 0.5) * W, (0.5 - this.v.y / this.size.h) * H);
+    return true;
+  }
+
   /** Poke with index fingertips. Returns true while the board is open (game pauses). */
   update(dt: number, hands: HandData[]) {
     this.cool = Math.max(0, this.cool - dt);
@@ -359,19 +407,7 @@ export class SettingsBoard {
       this.board.worldToLocal(this.v.copy(tip));
       const inside = Math.abs(this.v.x) < this.size.w / 2 && Math.abs(this.v.y) < this.size.h / 2 && Math.abs(this.v.z) < 0.012;
       if (inside && !this.boardInside[h] && this.cool === 0) {
-        const px = (this.v.x / this.size.w + 0.5) * W;
-        const py = (0.5 - this.v.y / this.size.h) * H;
-        const i = this.buttons.findIndex((b) => px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h);
-        if (i >= 0) {
-          this.hot = i;
-          this.buttons[i].act();
-          this.cool = 0.3;
-          this.draw();
-          setTimeout(() => {
-            this.hot = -1;
-            this.draw();
-          }, 160);
-        }
+        this.press((this.v.x / this.size.w + 0.5) * W, (0.5 - this.v.y / this.size.h) * H);
       }
       this.boardInside[h] = inside;
     }

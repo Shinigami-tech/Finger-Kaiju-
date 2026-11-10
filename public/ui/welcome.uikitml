@@ -87,7 +87,7 @@
     <div class="control">Left stick walk  |  A punch / throw  |  B jump on roofs</div>
     <div class="control">X grab a car, hold X to gnaw  |  right stick: zoom</div>
     <div class="control">Hands: pinch the ground to walk, pinch a building to smash it</div>
-    <div class="control">Squeeze grip over the city and drag it anywhere (or grip + point at a surface)</div>
+    <div class="control">Grip over the city: drag it. In menus: left stick moves it, right stick turns / resizes it</div>
     <div class="controls-title">DESKTOP</div>
     <div class="control">WASD walk, Shift run, J punch, E grab (hold = gnaw), Space jump, +/- zoom</div>
   </div>
