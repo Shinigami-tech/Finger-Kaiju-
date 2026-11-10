@@ -3387,15 +3387,6 @@ export class GameSystem extends createSystem({
     const R = 0.36;
     this.bubble.radius.value = HALF * zv > R + 0.04 ? R : 0;
     this.bubble.center.copy(this.anchor);
-    // see-through cut: buildings between the viewer's eyes and the hamster fade to a ghost
-    if (this.camp.phase === 'play' && this.hero.ready) {
-      this.city.updateMatrixWorld();
-      this.bubble.hero.copy(this.heroPos).setY(this.hero.root.position.y + this.hero.form.height * 0.55);
-      this.city.localToWorld(this.bubble.hero);
-      this.bubble.eye.copy(this.head);
-      this.bubble.cut.value = this.hero.form.height * 1.6 * zv;
-      this.bubble.ground.value = this.anchor.y + 0.004 * zv;
-    } else this.bubble.cut.value = 0;
     this.bubble.update(dt, this.anchor.y, 0.035);
     this.fx.textScale = 1 / Math.pow(zv, 0.75);
   }
