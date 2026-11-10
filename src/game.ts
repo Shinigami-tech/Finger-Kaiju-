@@ -668,6 +668,11 @@ export class GameSystem extends createSystem({
           if (b && b.enabled && b.plane.mesh.visible) this.onCampaignPick(b.pick);
           return;
         }
+        if (i === 98) {
+          this.board.open = !this.board.open;
+          this.sfx.pop();
+          return;
+        }
         if (this.camp.phase !== 'off') return;
         this.onMenuPick(i === 99 ? 'blitz-time' : MODES[i].id);
       }),
@@ -728,7 +733,11 @@ export class GameSystem extends createSystem({
     }
 
     // settings
-    this.world.createTransformEntity(this.board.root);
+    const boardEntity = this.world.createTransformEntity(this.board.root);
+    // the gear can also be clicked with a controller ray (not only poked with a finger)
+    const gearEntity = this.world.createTransformEntity(this.board.gear, { parent: boardEntity });
+    gearEntity.addComponent(ModeCard, { index: 98 });
+    gearEntity.addComponent(RayInteractable);
     try {
       this.desktopUi = mountDesktopSettings(this.settings);
     } catch {
@@ -1949,6 +1958,37 @@ export class GameSystem extends createSystem({
   }
 
   /* ---------------- per frame ---------------- */
+  private sv1 = new Vector3();
+  private sv2 = new Vector3();
+  private sv3 = new Vector3();
+  private sq = new Quaternion();
+  /**
+   * Stop the shadows from shimmering: move the sun's shadow box only in whole shadow-map texels.
+   * Without this the box slides a fraction of a texel every frame as the view follows the hamster
+   * (and with every tiny head movement in the headset), so every shadow edge crawls.
+   */
+  private snapShadow() {
+    const cam = this.sun.shadow.camera;
+    const texel = (cam.right - cam.left) / this.sun.shadow.mapSize.x;
+    this.city.updateMatrixWorld();
+    const T = this.sunTarget.getWorldPosition(this.sv1);
+    const fwd = this.sun.getWorldPosition(this.sv2).sub(T).negate().normalize();
+    const right = this.sv3.set(0, 1, 0).cross(fwd);
+    if (right.lengthSq() < 1e-8) right.set(1, 0, 0);
+    right.normalize();
+    const up = fwd.cross(right); // fwd is no longer needed: reuse it as "up"
+    const dx = T.dot(right);
+    const dy = T.dot(up);
+    const ex = dx - Math.round(dx / texel) * texel;
+    const ey = dy - Math.round(dy / texel) * texel;
+    // world correction -> city-local correction
+    const corr = right.multiplyScalar(-ex).addScaledVector(up, -ey);
+    this.city.getWorldQuaternion(this.sq).invert();
+    corr.applyQuaternion(this.sq).divideScalar(this.city.scale.x);
+    this.sunTarget.position.add(corr);
+    this.sun.position.add(corr);
+  }
+
   /** Diorama plinth (hidden in the close-up bubble view), nameplate and LED mood. */
   private updateLook(dt: number) {
     const r = this.world.renderer;
@@ -1974,7 +2014,8 @@ export class GameSystem extends createSystem({
 
     if (!this.fakeHands) this.hands.update(this.world.renderer, this.player, dt);
     // god mode with Quest controllers: each controller becomes a hamster paw (squeeze = fist, trigger = pinch)
-    if (this.godHands() && !this.fakeHands) {
+    // ... and while the settings board is open, so its buttons can be poked with a controller too
+    if ((this.godHands() || this.board.open) && !this.fakeHands) {
       for (const side of SIDES) {
         const pad = this.input.gamepads[side];
         if (!pad || this.hands.hands[side].tracked) continue;
@@ -2002,6 +2043,7 @@ export class GameSystem extends createSystem({
       if (this.searchT > 6) this.placeInFront();
     }
 
+    this.updateDrag();
     this.campaignCamera(dt);
     this.city.updateMatrixWorld();
     this.updateTipMarkers();
@@ -2024,8 +2066,16 @@ export class GameSystem extends createSystem({
 
     // settings board (mixed reality): poke the gear next to the city
     if (this.placed) {
-      this.a.set(-HALF - 0.03, 0.03, HALF + 0.03);
-      this.city.localToWorld(this.board.gear.position.copy(this.a));
+      if (this.camp.phase === 'off' && this.menuOpen()) {
+        // menu: a big gear right under the "?", next to the mode cards
+        this.qYaw.setFromAxisAngle(this.b.set(0, 1, 0), this.anchorYaw);
+        this.board.gear.position.set(0.3, 0.1, HALF + 0.045).applyQuaternion(this.qYaw).add(this.anchor);
+        this.board.gear.scale.setScalar(1.5);
+      } else {
+        this.a.set(-HALF - 0.03, 0.03, HALF + 0.03);
+        this.city.localToWorld(this.board.gear.position.copy(this.a));
+        this.board.gear.scale.setScalar(1);
+      }
       this.board.gear.lookAt(this.head);
       this.a.set(-HALF - 0.2, 0.2, 0);
       this.city.localToWorld(this.board.board.position.copy(this.a));
@@ -2174,6 +2224,7 @@ export class GameSystem extends createSystem({
     this.day.update(dt);
     // keep the sun's shadow box on the part of the city you are looking at
     this.sun.position.copy(this.day.dir).multiplyScalar(1.1 / this.city.scale.x).add(this.sunTarget.position);
+    this.snapShadow();
     this.ruins.night = this.day.night;
     this.fx.setNight(this.day.night);
     this.ruins.update(sim);
@@ -3361,7 +3412,7 @@ export class GameSystem extends createSystem({
     if (rp) {
       const ax = rp.getAxesValues(InputComponent.Thumbstick);
       if (ax && Math.abs(ax.y) > 0.5) this.zoomT = Math.min(6, Math.max(1, this.zoomT * (1 - ax.y * dt * 1.6)));
-      this.updatePlacing(rp.getButtonPressed(InputComponent.Squeeze));
+      if (!this.drag) this.updatePlacing(rp.getButtonPressed(InputComponent.Squeeze));
     }
     const kb = this.input.keyboard;
     if (kb.getKeyPressed('Equal') || kb.getKeyPressed('NumpadAdd')) this.zoomT = Math.min(6, this.zoomT * (1 + dt * 1.6));
@@ -3391,6 +3442,47 @@ export class GameSystem extends createSystem({
   }
 
   /** controller grip: point at any surface (table, shelf, aquarium lid...) and let go to move the city there */
+  private drag: { side: 'left' | 'right'; off: Vector3 } | null = null;
+  private dragV = new Vector3();
+  /**
+   * Squeeze a controller's grip with the controller over the city and the whole city follows
+   * your hand until you let go. (God modes use the grip as a fist, so not while one is running.)
+   */
+  private updateDrag() {
+    const godPlay = (this.camp.phase === 'off' && this.mode === 'playing') || this.camp.godT > 0;
+    if (!this.placed || godPlay || this.placing) {
+      this.drag = null;
+      return;
+    }
+    if (this.drag) {
+      const pad = this.input.gamepads[this.drag.side];
+      const grip = this.player.gripSpaces[this.drag.side];
+      if (!pad || !grip || !pad.getButtonPressed(InputComponent.Squeeze)) {
+        this.drag = null;
+        this.fx.ring(this.c.copy(this.focus), 0.3, 0x6fe08a, 0.6);
+        this.sfx.start();
+        return;
+      }
+      grip.getWorldPosition(this.dragV);
+      this.anchor.copy(this.dragV).add(this.drag.off);
+      if (this.camp.phase === 'off') this.city.position.copy(this.anchor);
+      return;
+    }
+    for (const side of SIDES) {
+      const pad = this.input.gamepads[side];
+      const grip = this.player.gripSpaces[side];
+      if (!pad || !grip || !pad.getButtonDown(InputComponent.Squeeze)) continue;
+      grip.getWorldPosition(this.dragV);
+      const reach = Math.min(HALF * this.city.scale.x, 0.4) + 0.1;
+      const dx = this.dragV.x - this.anchor.x;
+      const dz = this.dragV.z - this.anchor.z;
+      if (dx * dx + dz * dz > reach * reach || Math.abs(this.dragV.y - this.anchor.y) > 0.3) continue;
+      this.drag = { side, off: new Vector3().copy(this.anchor).sub(this.dragV) };
+      this.sfx.pop();
+      return;
+    }
+  }
+
   private updatePlacing(grip: boolean) {
     if (grip && !this.placing) {
       this.placing = true;
@@ -4741,8 +4833,20 @@ export class GameSystem extends createSystem({
     for (const b of this.cui.resultButtons) b.plane.mesh.visible = showResult;
     for (const b of this.cui.zoomButtons) b.plane.mesh.visible = on && ph !== 'select';
     this.cui.cards.forEach((b, i) => (b.plane.mesh.visible = showCardsUp && i < nCards));
-    this.cui.helpButton.plane.mesh.visible = on;
-    if (!on) return;
+    // in the game-mode menu the "?" (controls sheet) sits right next to the mode cards
+    const menuHelp = ph === 'off' && this.placed && this.menuOpen();
+    this.cui.helpButton.plane.mesh.visible = on || menuHelp;
+    if (!on) {
+      if (menuHelp) {
+        this.qYaw.setFromAxisAngle(this.b.set(0, 1, 0), this.anchorYaw);
+        const hb = this.cui.helpButton.plane.mesh;
+        hb.position.set(0.3, 0.17, HALF + 0.045).applyQuaternion(this.qYaw).add(this.anchor);
+        hb.lookAt(this.head);
+        const pick = this.cui.update(dt, [this.hands.hands.left, this.hands.hands.right]);
+        if (pick?.kind === 'help') this.toggleHelp();
+      }
+      return;
+    }
     this.qYaw.setFromAxisAngle(this.b.set(0, 1, 0), this.anchorYaw);
     const place = (m: Mesh, x: number, y: number, z: number, bob = 0) => {
       m.position.set(x, y, z).applyQuaternion(this.qYaw).add(this.anchor);

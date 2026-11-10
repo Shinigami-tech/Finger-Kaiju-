@@ -741,7 +741,8 @@ export class CampaignUi {
           ['Hold X', 'Eat it  (NOM NOM)'],
           ['A while holding', 'Throw it'],
           ['Right stick', 'Zoom in / out'],
-          ['Hold grip + point', 'Move the whole city'],
+          ['Grip over the city', 'GRAB & drag the city'],
+          ['Grip + point away', 'Send the city there'],
         ],
       ],
       [
