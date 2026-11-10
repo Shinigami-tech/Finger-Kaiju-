@@ -43,6 +43,7 @@ import {
   Vector3,
   VisibilityState,
   XRPlane,
+  ACESFilmicToneMapping,
 } from '@iwsdk/core';
 import { buildHelicopter, buildTank } from './city-builder.js';
 import { Fx, Sfx } from './fx.js';
@@ -78,6 +79,7 @@ import { HamsterPaws } from './paws.js';
 import { BoardState, CampaignSave, CampaignUi, CITIES, LEVELS, PER_CITY, PerkId, perkById, ThreatId, threatById, threatsFor, UiPick } from './campaign.js';
 import { formForLevel, Hero } from './hero.js';
 import { Ruins } from './ruins.js';
+import { applyRendererLook, gradeBuildings, Plinth, PLINTH_H, rimLight, softwareGl } from './look.js';
 import { kitAssetId } from './kit-manifest.js';
 import { CALM_MUSIC_ID, MUSIC_ID, SFX_FILES, sfxAssetId } from './sfx-manifest.js';
 
@@ -252,6 +254,9 @@ export class GameSystem extends createSystem({
   private cui = new CampaignUi();
   private csave = new CampaignSave();
   private sun!: DirectionalLight;
+  private plinth!: Plinth;
+  private tableShadow: Object3D | null = null;
+  private lookCache: { env?: unknown } = {};
   private sunTarget = new Object3D();
   /** where the city sits on the real table (world) and which way it faces */
   private anchor = new Vector3(0, 0.72, -0.62);
@@ -480,6 +485,7 @@ export class GameSystem extends createSystem({
 
     const renderer = this.world.renderer;
     renderer.shadowMap.enabled = true;
+    applyRendererLook(renderer, this.scene, this.lookCache);
     // Software-rendered emulator sessions (IWER) get a lighter framebuffer.
     if ((window as unknown as { IWER_DEVICE?: unknown }).IWER_DEVICE) renderer.xr.setFramebufferScaleFactor(0.35);
 
@@ -494,13 +500,18 @@ export class GameSystem extends createSystem({
     this.city.add(this.sunTarget);
     this.sun = sun;
     sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
+    const soft = softwareGl(renderer);
+    sun.shadow.mapSize.set(soft ? 1024 : 2048, soft ? 1024 : 2048);
     sun.shadow.bias = -0.0006;
     sun.shadow.normalBias = 0.0015;
     Object.assign(sun.shadow.camera, { left: -0.5, right: 0.5, top: 0.5, bottom: -0.5, near: 0.1, far: 3 });
     this.city.add(sun);
     const hemi = new HemisphereLight(0xe3ecff, 0x6b5a48, 1.0);
     this.city.add(hemi);
+    this.city.add(rimLight());
+    this.plinth = new Plinth(HALF);
+    this.plinth.root.visible = false;
+    this.city.add(this.plinth.root);
     this.day = new DayCycle(sun, hemi);
     this.city.add(this.day.root);
     this.city.add(this.ruins.root);
@@ -1143,6 +1154,8 @@ export class GameSystem extends createSystem({
     this.kit = kit;
     this.city.add(kit.root);
     this.day.setup(kit.lamps, kit.windowMats);
+    gradeBuildings(kit.windowMats);
+    this.tableShadow = kit.root.getObjectByName('TableShadow') ?? null;
     for (const spec of kit.buildings) {
       spec.object.name = 'Building';
       const e = this.world.createTransformEntity(spec.object, { parent: this.cityEntity });
@@ -1268,6 +1281,7 @@ export class GameSystem extends createSystem({
 
   /* ---------------- placement ---------------- */
   private placeCity(pos: Vector3, faceHead: boolean) {
+    pos.y += PLINTH_H; // the display plinth stands on the table, the city sits on top of it
     this.city.position.copy(pos);
     if (faceHead) {
       this.player.head.getWorldPosition(this.head);
@@ -1935,6 +1949,21 @@ export class GameSystem extends createSystem({
   }
 
   /* ---------------- per frame ---------------- */
+  /** Diorama plinth (hidden in the close-up bubble view), nameplate and LED mood. */
+  private updateLook(dt: number) {
+    const r = this.world.renderer;
+    if (r.toneMapping !== ACESFilmicToneMapping) applyRendererLook(r, this.scene, this.lookCache);
+    this.plinth.root.visible = this.placed && this.bubble.radius.value === 0;
+    if (this.tableShadow) this.tableShadow.visible = this.plinth.root.visible;
+    if (!this.plinth.root.visible) return;
+    if (this.game === 'campaign' && this.camp.phase !== 'off') {
+      const L = LEVELS[this.camp.level];
+      this.plinth.setLabel(L.city, `LEVEL ${String(this.camp.level + 1).padStart(2, '0')}`);
+    } else this.plinth.setLabel(THEMES[this.theme].name, 'FINGER KAIJU');
+    const alarm = (this.camp.phase === 'play' || this.mode === 'playing') && !this.paused ? 1 : 0;
+    this.plinth.update(dt, alarm);
+  }
+
   update(delta: number): void {
     if (this.world.visibilityState.peek() === VisibilityState.VisibleBlurred) return;
     const dt = Math.min(delta, 0.05);
@@ -2028,6 +2057,7 @@ export class GameSystem extends createSystem({
     }
     this.updateCampaignUi(dt);
     this.updateOverlay(dt);
+    this.updateLook(dt);
     // 3-2-1-GO
     if (this.pendingStart && !this.rebuild && this.ready && (this.game !== 'campaign' || this.hero.ready)) {
       this.pendingStart = false;
@@ -3369,6 +3399,7 @@ export class GameSystem extends createSystem({
       this.placing = false;
       if (this.reticle.visible) {
         this.reticle.getWorldPosition(this.a);
+        this.a.y += PLINTH_H;
         this.player.head.getWorldPosition(this.head);
         this.anchor.copy(this.a);
         this.anchorYaw = Math.atan2(this.head.x - this.a.x, this.head.z - this.a.z);

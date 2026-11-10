@@ -273,6 +273,74 @@ export class CampaignSave {
 }
 
 /* ---------------- drawing helpers ---------------- */
+
+/**
+ * Shared card chrome: deep two-tone gradient, a faint halftone texture, a glossy top sheen,
+ * a thin inner highlight and a gradient accent border with a bright top edge.
+ * Replaces the flat fill + stroke so every panel reads as one designed set.
+ */
+function chrome(g: CanvasRenderingContext2D, W: number, H: number, accent: string, opts: { pad?: number; r?: number; dim?: boolean; tint?: [string, string] } = {}) {
+  const pad = opts.pad ?? 8;
+  const r = opts.r ?? 40;
+  const x = pad, y = pad, w = W - pad * 2, h = H - pad * 2;
+  g.save();
+  // drop shadow
+  g.shadowColor = 'rgba(0,0,0,0.55)';
+  g.shadowBlur = 18;
+  g.shadowOffsetY = 6;
+  const bg = g.createLinearGradient(0, y, 0, y + h);
+  const [t0, t1] = opts.tint ?? (opts.dim ? ['#1c1a26', '#0f0e15'] : ['#2b1f66', '#0d0924']);
+  bg.addColorStop(0, t0);
+  bg.addColorStop(1, t1);
+  g.fillStyle = bg;
+  rr(g, x, y, w, h, r);
+  g.fill();
+  g.shadowColor = 'transparent';
+  g.clip();
+  // accent glow from the bottom
+  if (!opts.dim) {
+    const glow = g.createRadialGradient(W / 2, y + h * 1.05, 0, W / 2, y + h * 1.05, h * 0.8);
+    glow.addColorStop(0, accent + '55');
+    glow.addColorStop(1, accent + '00');
+    g.fillStyle = glow;
+    g.fillRect(x, y, w, h);
+  }
+  // halftone dots
+  g.fillStyle = 'rgba(255,255,255,0.035)';
+  const step = Math.max(10, Math.round(W / 42));
+  for (let yy = y; yy < y + h; yy += step) for (let xx = x + ((yy / step) % 2) * (step / 2); xx < x + w; xx += step) g.fillRect(xx, yy, 2, 2);
+  // glossy sheen on the top third
+  const sh = g.createLinearGradient(0, y, 0, y + h * 0.42);
+  sh.addColorStop(0, 'rgba(255,255,255,0.16)');
+  sh.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = sh;
+  g.fillRect(x, y, w, h * 0.42);
+  g.restore();
+  // borders
+  g.save();
+  const bw = Math.max(6, Math.round(W / 64));
+  const border = g.createLinearGradient(0, y, 0, y + h);
+  border.addColorStop(0, '#ffffff');
+  border.addColorStop(0.08, accent);
+  border.addColorStop(1, opts.dim ? accent : shade(accent, -0.45));
+  g.lineWidth = bw;
+  g.strokeStyle = border;
+  rr(g, x + bw / 2, y + bw / 2, w - bw, h - bw, r - bw / 2);
+  g.stroke();
+  g.lineWidth = 2;
+  g.strokeStyle = 'rgba(255,255,255,0.18)';
+  rr(g, x + bw + 4, y + bw + 4, w - bw * 2 - 8, h - bw * 2 - 8, Math.max(4, r - bw - 4));
+  g.stroke();
+  g.restore();
+}
+
+function shade(hex: string, k: number) {
+  const n = parseInt(hex.slice(1, 7), 16);
+  const f = (c: number) => Math.max(0, Math.min(255, Math.round(k < 0 ? c * (1 + k) : c + (255 - c) * k)));
+  const r = f(n >> 16), gg = f((n >> 8) & 255), b = f(n & 255);
+  return '#' + ((1 << 24) | (r << 16) | (gg << 8) | b).toString(16).slice(1);
+}
+
 function rr(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   g.beginPath();
   g.moveTo(x + r, y);
@@ -504,15 +572,7 @@ export class CampaignUi {
       const form = formForLevel(L.n);
       const newForm = form.level === L.n && L.n > 1;
       g.clearRect(0, 0, p.cw, p.ch);
-      const grad = g.createLinearGradient(0, 0, 0, p.ch);
-      grad.addColorStop(0, open ? '#2a2060' : '#1c1a26');
-      grad.addColorStop(1, open ? '#120d2c' : '#121118');
-      g.fillStyle = grad;
-      rr(g, 8, 8, p.cw - 16, p.ch - 16, 40);
-      g.fill();
-      g.lineWidth = 10;
-      g.strokeStyle = open ? form.color : '#3a3848';
-      g.stroke();
+      chrome(g, p.cw, p.ch, open ? form.color : '#3a3848', { dim: !open });
       g.textAlign = 'center';
       g.textBaseline = 'middle';
       g.fillStyle = open ? '#fff' : '#5a586a';
@@ -537,12 +597,7 @@ export class CampaignUi {
     const p = this.back.plane;
     const g = p.g;
     g.clearRect(0, 0, p.cw, p.ch);
-    g.fillStyle = 'rgba(16,12,36,0.92)';
-    rr(g, 8, 8, p.cw - 16, p.ch - 16, 40);
-    g.fill();
-    g.lineWidth = 8;
-    g.strokeStyle = '#6a5cff';
-    g.stroke();
+    chrome(g, p.cw, p.ch, '#6a5cff');
     g.fillStyle = '#fff';
     g.textAlign = 'center';
     g.textBaseline = 'middle';
@@ -570,15 +625,7 @@ export class CampaignUi {
         p.tex.needsUpdate = true;
         return;
       }
-      const grad = g.createLinearGradient(0, 0, 0, p.ch);
-      grad.addColorStop(0, '#2a2060');
-      grad.addColorStop(1, '#120d2c');
-      g.fillStyle = grad;
-      rr(g, 8, 8, p.cw - 16, p.ch - 16, 40);
-      g.fill();
-      g.lineWidth = 12;
-      g.strokeStyle = c.color;
-      g.stroke();
+      chrome(g, p.cw, p.ch, c.color);
       g.textAlign = 'center';
       g.textBaseline = 'middle';
       g.fillStyle = c.color;
@@ -613,15 +660,7 @@ export class CampaignUi {
         p.tex.needsUpdate = true;
         return;
       }
-      const grad = g.createLinearGradient(0, 0, 0, p.ch);
-      grad.addColorStop(0, '#1d2b4a');
-      grad.addColorStop(1, '#0c1222');
-      g.fillStyle = grad;
-      rr(g, 8, 8, p.cw - 16, p.ch - 16, 40);
-      g.fill();
-      g.lineWidth = 12;
-      g.strokeStyle = c.color;
-      g.stroke();
+      chrome(g, p.cw, p.ch, c.color, { tint: ['#1f3260', '#0a1020'] });
       g.textAlign = 'center';
       g.textBaseline = 'middle';
       // key number for desktop players
@@ -771,15 +810,7 @@ export class CampaignUi {
     const W = p.cw;
     const H = p.ch;
     g.clearRect(0, 0, W, H);
-    const grad = g.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, 'rgba(34,26,78,0.95)');
-    grad.addColorStop(1, 'rgba(14,10,34,0.95)');
-    g.fillStyle = grad;
-    rr(g, 10, 10, W - 20, H - 20, 44);
-    g.fill();
-    g.lineWidth = 10;
-    g.strokeStyle = s.phase === 'lost' ? '#ff5a5a' : s.phase === 'won' ? '#ffcf3a' : formForLevel(s.level.n).color;
-    g.stroke();
+    chrome(g, W, H, s.phase === 'lost' ? '#ff5a5a' : s.phase === 'won' ? '#ffcf3a' : formForLevel(s.level.n).color, { pad: 10, r: 44 });
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     const L = s.level;

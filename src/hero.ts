@@ -10,6 +10,9 @@ import {
   AdditiveBlending,
   Box3,
   CircleGeometry,
+  DoubleSide,
+  PlaneGeometry,
+  SphereGeometry,
   Color,
   Group,
   Material,
@@ -20,6 +23,7 @@ import {
   RingGeometry,
   Vector3,
 } from '@iwsdk/core';
+import { furRim } from './look.js';
 import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 export interface HeroForm {
@@ -212,15 +216,67 @@ export class Hero {
       mat.metalness = 0;
       mat.roughness = Math.max(0.65, mat.roughness ?? 0.8);
       this.wobbly(mat);
+      furRim(mat, form.id === 'kaiju' ? 0xc98cff : 0xffe6c2);
       mesh.material = mat;
       this.mats.push(mat);
     });
+    wrap.add(this.makeCape(form));
     this.model = wrap;
     this.body.add(wrap);
     this.radius = Math.max(0.006, form.height * 0.3);
     this.ring.scale.setScalar(this.radius * 1.7);
     this.glow.scale.setScalar(this.radius * 1.3);
     this.ringMat.color.set(form.color);
+  }
+
+  private capeU = { cT: { value: 0 }, cWalk: { value: 0 }, cAir: { value: 0 } };
+  /**
+   * A hero cape: a segmented plane hanging from the shoulders, rippled in the vertex shader.
+   * It trails further back the faster the hamster runs and flies up during jumps.
+   */
+  private makeCape(form: HeroForm) {
+    const h = form.height;
+    const w = h * 0.6;
+    const len = h * 0.66;
+    const geo = new PlaneGeometry(w, len, 8, 12);
+    geo.translate(0, -len / 2, 0); // hang from the top edge
+    const color = form.id === 'kaiju' ? 0x6a2bd6 : form.id === 'giga' ? 0x1fa86a : form.id === 'mega' ? 0x1e7bd8 : 0xd8232f;
+    const mat = new MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.05, side: DoubleSide });
+    const u = this.capeU;
+    mat.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, u);
+      shader.uniforms.cLen = { value: len };
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nuniform float cT; uniform float cWalk; uniform float cAir; uniform float cLen;')
+        .replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+          {
+            float d = clamp(-position.y / cLen, 0.0, 1.0); // 0 at the shoulders, 1 at the hem
+            float k = d * d;
+            float wave = sin(cT * (6.0 + cWalk * 8.0) - d * 6.0 + position.x / cLen * 3.0);
+            float back = (0.08 + cWalk * 0.55 + cAir * 0.6) * cLen;
+            float xn = position.x / (cLen * 0.45);
+            // drape over the round back and bottom, wrap the edges forward around the body
+            transformed.z -= sqrt(d) * 0.62 * cLen + k * back + d * wave * cLen * (0.04 + cWalk * 0.08);
+            transformed.z += xn * xn * cLen * 0.16 * (1.0 - 0.5 * d);
+            transformed.y += k * (cWalk * 0.25 + cAir * 0.55) * cLen;
+            transformed.x *= 0.62 + d * 0.62; // narrow collar, wide hem
+          }`,
+        );
+    };
+    mat.customProgramCacheKey = () => 'fk-cape';
+    const cape = new Mesh(geo, mat);
+    cape.name = 'HeroCape';
+    cape.castShadow = true;
+    cape.position.set(0, h * 0.74, -h * 0.2);
+    cape.rotation.x = 0.05;
+    // gold clasp at the collar
+    const clasp = new Mesh(new SphereGeometry(h * 0.045, 12, 8), new MeshStandardMaterial({ color: 0xffcf3a, metalness: 0.8, roughness: 0.25, emissive: 0x6a4a00, emissiveIntensity: 0.4 }));
+    clasp.position.set(0, h * 0.72, -h * 0.17);
+    const g = new Group();
+    g.add(cape, clasp);
+    return g;
   }
 
   get ready() {
@@ -280,6 +336,9 @@ export class Hero {
     for (const m of this.mats) m.emissiveIntensity = this.flash > 0 ? 1.2 : this.form.id === 'kaiju' ? 0.12 : 0;
     const walk = this.carried || this.airborne ? 0 : this.moving;
     this.u.hT.value = this.t;
+    this.capeU.cT.value = this.t;
+    this.capeU.cWalk.value = this.u.hWalk.value;
+    this.capeU.cAir.value += ((this.airborne ? 1 : 0) - this.capeU.cAir.value) * Math.min(1, dt * 6);
     this.u.hWalk.value += (walk - this.u.hWalk.value) * Math.min(1, dt * 8);
     this.u.hChew.value += (this.chew - this.u.hChew.value) * Math.min(1, dt * 10);
     // squash & stretch spring

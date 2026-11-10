@@ -430,8 +430,9 @@ export async function buildKitCity(load: Loader): Promise<KitCity> {
 
   // shadow catcher for the real table + ground plates
   const catcher = new Mesh(new PlaneGeometry(GRID * TILE + 0.4, GRID * TILE + 0.4), new ShadowMaterial({ opacity: 0.35 }));
+  catcher.name = 'TableShadow';
   catcher.rotation.x = -Math.PI / 2;
-  catcher.position.y = 0.0004;
+  catcher.position.y = -0.0404; // on the table, under the display plinth
   catcher.receiveShadow = true;
   root.add(catcher);
   statics.add(plate(GRID * TILE + 0.012, 0.0015, GRID * TILE + 0.012, 0x4b5160, 0, 0));
