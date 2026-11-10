@@ -957,12 +957,6 @@ export class CampaignUi {
     g.fillStyle = s.phase === 'won' ? '#ffcf3a' : '#ff5a5a';
     g.fillText(s.phase === 'won' ? (s.stars === 3 ? 'PERFECT!' : 'LEVEL CLEAR!') : s.reason, W / 2, 196);
     for (let k = 0; k < 3; k++) star(g, W / 2 + (k - 1) * 170, 318, 66, k < s.shown, true);
-    // what each star is for
-    g.font = '800 22px system-ui, sans-serif';
-    ['GOAL DONE', `UNDER ${fmt(L.par)}`, 'NOBODY HURT'].forEach((lab, k) => {
-      g.fillStyle = k < s.shown ? '#ffcf3a' : 'rgba(255,255,255,0.35)';
-      g.fillText(lab, W / 2 + (k - 1) * 170, 404);
-    });
     g.font = '700 32px system-ui, sans-serif';
     g.fillStyle = '#d0caf5';
     if (s.phase === 'won') {
@@ -972,14 +966,14 @@ export class CampaignUi {
         const used = L.limit - s.time;
         if (used > L.par) tips.push(`${fmt(used)}: beat ${fmt(L.par)} for a star (${Math.ceil(used - L.par)}s faster)`);
       } else tips.push('Fast, clean, flawless. A true kaiju.');
-      tips.slice(0, 2).forEach((t, k) => g.fillText(t, W / 2, 452 + k * 38));
+      tips.slice(0, 2).forEach((t, k) => g.fillText(t, W / 2, 428 + k * 42));
     } else {
-      g.fillText('So close! Try again.', W / 2, 452);
+      g.fillText('So close! Try again.', W / 2, 428);
     }
     if (s.newForm) {
       g.font = '900 36px system-ui, sans-serif';
       g.fillStyle = '#6fe08a';
-      g.fillText(`UNLOCKED: ${s.newForm.toUpperCase()}!`, W / 2, 530);
+      g.fillText(`UNLOCKED: ${s.newForm.toUpperCase()}!`, W / 2, 508);
     }
     p.tex.needsUpdate = true;
   }

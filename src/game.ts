@@ -3135,7 +3135,6 @@ export class GameSystem extends createSystem({
       return;
     }
     if (this.camp.phase !== 'won' && this.camp.phase !== 'lost' && p.kind !== 'back') return;
-    if (p.kind !== 'back' && this.camp.revealT < this.camp.stars * 0.5 + 0.3) return; // stars still being counted
     if (p.kind === 'retry') this.startLevel(this.camp.level);
     else if (p.kind === 'next') {
       const n = this.camp.level + 1;
@@ -4759,13 +4758,7 @@ export class GameSystem extends createSystem({
     }
     if (showBoard) place(this.cui.board.mesh, 0, 0.3, -0.36);
     if (showResult) {
-      // wait until the stars have been counted out, so nobody skips past the result
-      const revealed = this.camp.revealT >= this.camp.stars * 0.5 + 0.3;
-      for (const b of this.cui.resultButtons) {
-        b.plane.mesh.visible = revealed;
-        b.enabled = revealed;
-      }
-      const okNext = revealed && ph === 'won' && this.camp.level + 1 < LEVELS.length;
+      const okNext = ph === 'won' && this.camp.level + 1 < LEVELS.length;
       this.cui.resultButtons[1].enabled = okNext;
       this.cui.resultButtons[1].plane.mesh.visible = okNext;
       const vis = this.cui.resultButtons.filter((b) => b.plane.mesh.visible);
