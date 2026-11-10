@@ -31,6 +31,14 @@ export class Bubble {
   /** how visible the city stays far from the hero (0..1) */
   readonly minAlpha = { value: 0.28 };
   private uCenter = { value: this.center };
+  /** world-space eye (viewer) and hero chest point for the see-through cut */
+  readonly eye = new Vector3();
+  readonly hero = new Vector3();
+  /** world-space radius of the see-through tube; 0 = off. w = ground height (world y) kept solid */
+  readonly cut = { value: 0 };
+  readonly ground = { value: 0 };
+  private uEye = { value: this.eye };
+  private uHero = { value: this.hero };
   private patched = new WeakSet<Material>();
   readonly rim = new Group();
   private wall: Mesh;
@@ -75,6 +83,10 @@ export class Bubble {
       shader.uniforms.fkC = uC;
       shader.uniforms.fkR = uR;
       shader.uniforms.fkMin = uM;
+      shader.uniforms.fkEye = this.uEye;
+      shader.uniforms.fkHero = this.uHero;
+      shader.uniforms.fkCut = this.cut;
+      shader.uniforms.fkGround = this.ground;
       shader.vertexShader = shader.vertexShader
         .replace('void main() {', 'varying vec3 vFkW;\nvoid main() {')
         .replace(
@@ -96,8 +108,27 @@ export class Bubble {
         `uniform vec3 fkC;
         uniform float fkR;
         uniform float fkMin;
+        uniform vec3 fkEye;
+        uniform vec3 fkHero;
+        uniform float fkCut;
+        uniform float fkGround;
         varying vec3 vFkW;
         void main() {
+          if ( fkCut > 0.0 && vFkW.y > fkGround ) {
+            // see-through tube from the viewer to the hero: anything standing in between turns to a ghost
+            vec3 fkD = fkHero - fkEye;
+            float fkT = clamp( dot( vFkW - fkEye, fkD ) / max( dot( fkD, fkD ), 1e-6 ), 0.0, 1.0 );
+            float fkDist = length( vFkW - ( fkEye + fkD * fkT ) );
+            float fkR = fkCut * ( 0.45 + 0.55 * fkT ); // a cone that widens towards the hero
+            float fkA = mix( 0.14, 1.0, smoothstep( fkR * 0.55, fkR, fkDist ) );
+            fkA = mix( 1.0, fkA, step( fkT, 0.93 ) );
+            vec2 fkQ = mod( floor( gl_FragCoord.xy ), 4.0 );
+            float fkB2 = ( fkQ.x == 0.0 ? ( fkQ.y == 0.0 ? 0.0 : fkQ.y == 1.0 ? 12.0 : fkQ.y == 2.0 ? 3.0 : 15.0 )
+                       : fkQ.x == 1.0 ? ( fkQ.y == 0.0 ? 8.0 : fkQ.y == 1.0 ? 4.0 : fkQ.y == 2.0 ? 11.0 : 7.0 )
+                       : fkQ.x == 2.0 ? ( fkQ.y == 0.0 ? 2.0 : fkQ.y == 1.0 ? 14.0 : fkQ.y == 2.0 ? 1.0 : 13.0 )
+                       : ( fkQ.y == 0.0 ? 10.0 : fkQ.y == 1.0 ? 6.0 : fkQ.y == 2.0 ? 9.0 : 5.0 ) ) / 16.0 + 0.03;
+            if ( fkB2 > fkA ) discard;
+          }
           if ( fkR > 0.0 ) {
             // outside the focus circle the city fades to a see-through ghost (ordered dither: no sorting needed)
             float fkD = length( vFkW.xz - fkC.xz );

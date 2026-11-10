@@ -3135,6 +3135,7 @@ export class GameSystem extends createSystem({
       return;
     }
     if (this.camp.phase !== 'won' && this.camp.phase !== 'lost' && p.kind !== 'back') return;
+    if (p.kind !== 'back' && this.camp.revealT < this.camp.stars * 0.5 + 0.3) return; // stars still being counted
     if (p.kind === 'retry') this.startLevel(this.camp.level);
     else if (p.kind === 'next') {
       const n = this.camp.level + 1;
@@ -3386,6 +3387,15 @@ export class GameSystem extends createSystem({
     const R = 0.36;
     this.bubble.radius.value = HALF * zv > R + 0.04 ? R : 0;
     this.bubble.center.copy(this.anchor);
+    // see-through cut: buildings between the viewer's eyes and the hamster fade to a ghost
+    if (this.camp.phase === 'play' && this.hero.ready) {
+      this.city.updateMatrixWorld();
+      this.bubble.hero.copy(this.heroPos).setY(this.hero.root.position.y + this.hero.form.height * 0.55);
+      this.city.localToWorld(this.bubble.hero);
+      this.bubble.eye.copy(this.head);
+      this.bubble.cut.value = Math.max(0.05, this.hero.form.height * 3.2) * zv;
+      this.bubble.ground.value = this.anchor.y + 0.004 * zv;
+    } else this.bubble.cut.value = 0;
     this.bubble.update(dt, this.anchor.y, 0.035);
     this.fx.textScale = 1 / Math.pow(zv, 0.75);
   }
@@ -4758,7 +4768,13 @@ export class GameSystem extends createSystem({
     }
     if (showBoard) place(this.cui.board.mesh, 0, 0.3, -0.36);
     if (showResult) {
-      const okNext = ph === 'won' && this.camp.level + 1 < LEVELS.length;
+      // wait until the stars have been counted out, so nobody skips past the result
+      const revealed = this.camp.revealT >= this.camp.stars * 0.5 + 0.3;
+      for (const b of this.cui.resultButtons) {
+        b.plane.mesh.visible = revealed;
+        b.enabled = revealed;
+      }
+      const okNext = revealed && ph === 'won' && this.camp.level + 1 < LEVELS.length;
       this.cui.resultButtons[1].enabled = okNext;
       this.cui.resultButtons[1].plane.mesh.visible = okNext;
       const vis = this.cui.resultButtons.filter((b) => b.plane.mesh.visible);
